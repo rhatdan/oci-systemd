@@ -50,14 +50,12 @@ static inline void fclosep(FILE **fp) {
 
 DEFINE_CLEANUP_FUNC(yajl_val, yajl_tree_free)
 
-#define pr_perror(fmt, ...) syslog(LOG_ERR, "systemdhook <error>: " fmt ": %m\n", ##__VA_ARGS__)
-#define pr_pinfo(fmt, ...) syslog(LOG_INFO, "systemdhook <info>: " fmt "\n", ##__VA_ARGS__)
-#define pr_pdebug(fmt, ...) syslog(LOG_DEBUG, "systemdhook <debug>: " fmt "\n", ##__VA_ARGS__)
+#define pr_perror(fmt, ...) syslog(LOG_ERR, "oci_systemd_hook <error>: " fmt ": %m", ##__VA_ARGS__)
+#define pr_pinfo(fmt, ...) syslog(LOG_INFO, "oci_systemd_hook <info>: " fmt, ##__VA_ARGS__)
+#define pr_pdebug(fmt, ...) syslog(LOG_DEBUG, "oci_systemd_hook <debug>: " fmt, ##__VA_ARGS__)
 
 #define BUFLEN 1024
 #define CONFIGSZ 65536
-#define CGROUP_ROOT "/sys/fs/cgroup"
-
 #define CGROUP_ROOT "/sys/fs/cgroup"
 
 /*
@@ -118,7 +116,6 @@ static char *get_process_cgroup_subsystem_path(int pid, const char *subsystem) {
 		pr_pdebug("%s", ptr);
 		ptr++;
 		if (!strncmp(ptr, subsystem, strlen(subsystem))) {
-			pr_pdebug("Found");
 			char *path = strchr(ptr, '/');
 			if (path == NULL) {
 				pr_perror("Error finding path in cgroup: %s", line);
@@ -159,7 +156,6 @@ static int mount_cgroup_path(const char *rootfs, const char* cgroup_path)
 	char cont_cgroup_dir[PATH_MAX];
 	snprintf(cont_cgroup_dir, PATH_MAX, "%s/%s", rootfs, cgroup_path);
 
-	int ret = 0;
 	if (makepath(cont_cgroup_dir, 0755) == -1) {
 		if (errno != EEXIST) {
 			pr_perror("Failed to mkdir container cgroup dir %s", cgroup_path);
@@ -168,12 +164,12 @@ static int mount_cgroup_path(const char *rootfs, const char* cgroup_path)
 	}
 
 	pr_pinfo("Mounting %s at %s\n", cgroup_path, cont_cgroup_dir);
-	if (mount(cgroup_path, cont_cgroup_dir, "bind", MS_BIND, NULL) == -1) {
+	if (mount(cgroup_path, cont_cgroup_dir, "bind", MS_RDONLY|MS_BIND, NULL) == -1) {
 		pr_perror("Failed to mount %s at %s", cgroup_path, cont_cgroup_dir);
 		return -1;
 	}
 
-	return ret;
+	return 0;
 }
 
 DEFINE_CLEANUP_FUNC(struct libmnt_table*, mnt_free_table);
@@ -200,13 +196,14 @@ static int mount_cgroups(const char *rootfs)
 
         ret = 0;
         for (;;) {
-                const char *path;
-                struct libmnt_fs *fs;
-                int rc;
-
+		struct libmnt_fs *fs=NULL;
+		const char *path;
+		int rc=0;
                 rc = mnt_table_next_fs(t, i, &fs);
-                if (rc == 1)
+                if (rc == 1) {
+                        pr_pinfo("Done Parsing Mount table /proc/self/mountinfo");
                         break;
+		}
                 if (rc < 0) {
 
                         pr_perror("Failed to get next entry from /proc/self/mountinfo");
@@ -214,22 +211,19 @@ static int mount_cgroups(const char *rootfs)
 		}
 
                 path = mnt_fs_get_target(fs);
+		pr_pdebug("Path: %s", path);
 
-		if (!strcmp(path, CGROUP_ROOT)) {
-			pr_pinfo("Skipping /sys/fs/cgroup");
-			continue;
-		}
-
-
-		if (!strncmp(path, CGROUP_ROOT, strlen(CGROUP_ROOT))) {
-			pr_pinfo("Found path: %s\n", path);
+		if (!strncmp(path, CGROUP_ROOT, strlen(CGROUP_ROOT)) && strcmp(path, CGROUP_ROOT)) {
+			pr_pdebug("Found path: %s", path);
 			rc = mount_cgroup_path(rootfs, path);
+			pr_pdebug("Found1 path: %s", path);
 			if (rc < 0) {
 				pr_perror("Failed to mount %s");
 				return -1;
 			}
 		}
         }
+	pr_pdebug("Done /sys/fs/cgroup");
 
         return ret;
 }
@@ -414,7 +408,7 @@ int prestart(const char *rootfs,
 		}
 
 		/* Mount tmpfs at /sys/fs/cgroup for systemd */
-		if (mount("tmpfs", cgroup_dir, "tmpfs", MS_NODEV|MS_NOSUID, "mode=755") == -1) {
+		if (mount("tmpfs", cgroup_dir, "tmpfs", MS_RDONLY|MS_NODEV|MS_NOSUID, "mode=755") == -1) {
 			pr_perror("Failed to mount tmpfs at /sys/fs/cgroup");
 			return -1;
 		}
