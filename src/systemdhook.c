@@ -12,6 +12,7 @@
 #include <sched.h>
 #include <unistd.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <linux/limits.h>
 #include <selinux/selinux.h>
 #include <yajl/yajl_tree.h>
@@ -49,12 +50,94 @@ static inline void fclosep(FILE **fp) {
 
 DEFINE_CLEANUP_FUNC(yajl_val, yajl_tree_free)
 
-#define pr_perror(fmt, ...) syslog(LOG_ERR, "systemdhook: " fmt ": %m\n", ##__VA_ARGS__)
-#define pr_pinfo(fmt, ...) syslog(LOG_INFO, "systemdhook: " fmt ": %m\n", ##__VA_ARGS__)
+#define pr_perror(fmt, ...) syslog(LOG_ERR, "systemdhook <error>: " fmt ": %m\n", ##__VA_ARGS__)
+#define pr_pinfo(fmt, ...) syslog(LOG_INFO, "systemdhook <info>: " fmt "\n", ##__VA_ARGS__)
+#define pr_pdebug(fmt, ...) syslog(LOG_DEBUG, "systemdhook <debug>: " fmt "\n", ##__VA_ARGS__)
 
 #define BUFLEN 1024
 #define CONFIGSZ 65536
 #define CGROUP_ROOT "/sys/fs/cgroup"
+
+#define CGROUP_ROOT "/sys/fs/cgroup"
+
+/*
+ * Get the contents of the file specified by its path
+ */
+static char *get_file_contents(const char *path) {
+	_cleanup_close_ int fd = -1;
+	if ((fd = open(path, O_RDONLY)) == -1) {
+		pr_perror("Failed to open file for reading");
+		return NULL;
+	}
+
+	char buffer[256];
+	size_t rd;
+	rd = read(fd, buffer, 256);
+	if (rd == -1) {
+		pr_perror("Failed to read file contents");
+		return NULL;
+	}
+
+	buffer[rd] = '\0';
+
+	return strdup(buffer);
+}
+
+/*
+ * Get the cgroup file system path for the specified process id
+ */
+static char *get_process_cgroup_subsystem_path(int pid, const char *subsystem) {
+	_cleanup_free_ char *cgroups_file_path = NULL;
+	int rc;
+	rc = asprintf(&cgroups_file_path, "/proc/%d/cgroup", pid);
+	if (rc < 0) {
+		pr_perror("Failed to allocate memory for cgroups file path");
+		return NULL;
+	}
+
+	_cleanup_fclose_ FILE *fp = NULL;
+	fp = fopen(cgroups_file_path, "r");
+	if (fp == NULL) {
+		pr_perror("Failed to open cgroups file");
+		return NULL;
+	}
+
+	_cleanup_free_ char *line = NULL;
+	ssize_t read;
+	size_t len = 0;
+	char *ptr;
+	char *path;
+	char *subsystem_path = NULL;
+	while ((read = getline(&line, &len, fp)) != -1) {
+		pr_pdebug("%s", line);
+		ptr = strchr(line, ':');
+		if (ptr == NULL) {
+			pr_perror("Error parsing cgroup, ':' not found: %s", line);
+			return NULL;
+		}
+		pr_pdebug("%s", ptr);
+		ptr++;
+		if (!strncmp(ptr, subsystem, strlen(subsystem))) {
+			pr_pdebug("Found");
+			char *path = strchr(ptr, '/');
+			if (path == NULL) {
+				pr_perror("Error finding path in cgroup: %s", line);
+				return NULL;
+			}
+			pr_pdebug("PATH: %s", path);
+			rc = asprintf(&subsystem_path, "%s/%s%s", CGROUP_ROOT, subsystem, path);
+			if (rc < 0) {
+				pr_perror("Failed to allocate memory for subsystemd path");
+				return NULL;
+			}
+			pr_pdebug("SUBSYSTEM_PATH: %s", subsystem_path);
+			subsystem_path[strlen(subsystem_path) - 1] = '\0';
+			return subsystem_path;
+		}
+	}
+
+	return NULL;
+}
 
 static int makepath(char *dir, mode_t mode)
 {
@@ -154,7 +237,7 @@ static int mount_cgroups(const char *rootfs)
 bool contains_mount(const char **config_mounts, unsigned len, const char *mount) {
 	for (unsigned i = 0; i < len; i++) {
 		if (!strcmp(mount, config_mounts[i])) {
-			pr_pinfo("%s already present as a mount point in container configuration, skipping\n", mount);
+			pr_pdebug("%s already present as a mount point in container configuration, skipping\n", mount);
 			return true;
 		}
 	}
@@ -224,6 +307,36 @@ int prestart(const char *rootfs,
 		}
 	}
 
+	_cleanup_free_ char *memory_cgroup_path = NULL;
+	memory_cgroup_path = get_process_cgroup_subsystem_path(pid, "memory");
+	if (!memory_cgroup_path) {
+		pr_perror("Failed to get memory subsystem path for the process");
+		return -1;
+	}
+
+	char memory_limit_path[PATH_MAX];
+	snprintf(memory_limit_path, PATH_MAX, "%s/memory.limit_in_bytes", memory_cgroup_path);
+
+	pr_pdebug("memory path: %s", memory_limit_path);
+
+	_cleanup_free_ char *memory_limit_str = NULL;
+	memory_limit_str = get_file_contents(memory_limit_path);
+	if (!memory_limit_str) {
+		pr_perror("Failed to get memory limit from cgroups");
+		return -1;
+	}
+
+	pr_pdebug("LIMIT: %s\n", memory_limit_str);
+
+	uint64_t memory_limit_in_bytes = 0;
+	char *ptr = NULL;
+
+	memory_limit_in_bytes = strtoull(memory_limit_str, &ptr, 10);
+
+	pr_pdebug("Limit in bytes: ""%" PRIu64 "\n", memory_limit_in_bytes);
+
+	/* Set it to half of limit in kb */
+	uint64_t memory_limit_in_kb = memory_limit_in_bytes / 2048;
 
 	char tmp_dir[PATH_MAX];
 	snprintf(tmp_dir, PATH_MAX, "%s/tmp", rootfs);
@@ -238,9 +351,9 @@ int prestart(const char *rootfs,
 		}
 
 		if (!strcmp("", mount_label)) {
-			rc = asprintf(&options, "mode=1777,size=65536k");
+			rc = asprintf(&options, "mode=1777,size=%" PRIu64 "k", memory_limit_in_kb);
 		} else {
-			rc = asprintf(&options, "mode=1777,size=65536k,context=\"%s\"", mount_label);
+			rc = asprintf(&options, "mode=1777,size=%" PRIu64 "k,context=\"%s\"", memory_limit_in_kb, mount_label);
 		}
 		if (rc < 0) {
 			pr_perror("Failed to allocate memory for context");
@@ -317,13 +430,13 @@ int prestart(const char *rootfs,
 		snprintf(mid_path, PATH_MAX, "%s/etc/machine-id", rootfs);
 		fd = open(mid_path, O_CREAT|O_WRONLY, 0444);
 		if (fd < 0) {
-			pr_perror("Failed to open %s for writing\n", mid_path);
+			pr_perror("Failed to open %s for writing", mid_path);
 			return -1;
 		}
 
 		rc = dprintf(fd, "%.32s\n", id);
 		if (rc < 0) {
-			pr_perror("Failed to write id to %s\n", mid_path);
+			pr_perror("Failed to write id to %s", mid_path);
 			return -1;
 		}
 	}
@@ -376,10 +489,10 @@ int main(int argc, char *argv[])
 	/* Read the entire config file from stdin */
 	rd = fread((void *)stateData, 1, sizeof(stateData) - 1, stdin);
 	if (rd == 0 && !feof(stdin)) {
-		pr_perror("error encountered on file read\n");
+		pr_perror("Error encountered on file read");
 		return EXIT_FAILURE;
 	} else if (rd >= sizeof(stateData) - 1) {
-		pr_perror("config file too big\n");
+		pr_perror("Config file too big");
 		return EXIT_FAILURE;
 	}
 
@@ -392,7 +505,6 @@ int main(int argc, char *argv[])
 		} else {
 			pr_perror("unknown error");
 		}
-		pr_perror("\n");
 		return EXIT_FAILURE;
 	}
 
@@ -400,7 +512,7 @@ int main(int argc, char *argv[])
 	const char *root_path[] = { "root", (const char *)0 };
 	yajl_val v_root = yajl_tree_get(node, root_path, yajl_t_string);
 	if (!v_root) {
-		pr_perror("root not found in state\n");
+		pr_perror("root not found in state");
 		return EXIT_FAILURE;
 	}
 	char *rootfs = YAJL_GET_STRING(v_root);
@@ -408,7 +520,7 @@ int main(int argc, char *argv[])
 	const char *pid_path[] = { "pid", (const char *) 0 };
 	yajl_val v_pid = yajl_tree_get(node, pid_path, yajl_t_number);
 	if (!v_pid) {
-		pr_perror("pid not found in state\n");
+		pr_perror("pid not found in state");
 		return EXIT_FAILURE;
 	}
 	int target_pid = YAJL_GET_INTEGER(v_pid);
@@ -416,7 +528,7 @@ int main(int argc, char *argv[])
 	const char *id_path[] = { "id", (const char *)0 };
 	yajl_val v_id = yajl_tree_get(node, id_path, yajl_t_string);
 	if (!v_id) {
-		pr_perror("id not found in state\n");
+		pr_perror("id not found in state");
 		return EXIT_FAILURE;
 	}
 	char *id = YAJL_GET_STRING(v_id);
@@ -424,15 +536,15 @@ int main(int argc, char *argv[])
 	/* Parse the config file */
 	fp = fopen(argv[2], "r");
 	if (fp == NULL) {
-		pr_perror("Failed to open config file: %s\n", argv[2]);
+		pr_perror("Failed to open config file: %s", argv[2]);
 		return EXIT_FAILURE;
 	}
 	rd = fread((void *)configData, 1, sizeof(configData) - 1, fp);
 	if (rd == 0 && !feof(fp)) {
-		pr_perror("error encountered on file read\n");
+		pr_perror("error encountered on file read");
 		return EXIT_FAILURE;
 	} else if (rd >= sizeof(configData) - 1) {
-		pr_perror("config file too big\n");
+		pr_perror("config file too big");
 		return EXIT_FAILURE;
 	}
 
@@ -444,7 +556,6 @@ int main(int argc, char *argv[])
 		} else {
 			pr_perror("unknown error");
 		}
-		pr_perror("\n");
 		return EXIT_FAILURE;
 	}
 
@@ -452,14 +563,14 @@ int main(int argc, char *argv[])
 	const char *cmd_path[] = { "Path", (const char *)0 };
 	yajl_val v_cmd = yajl_tree_get(config_node, cmd_path, yajl_t_string);
 	if (!v_cmd) {
-		pr_perror("Path not found in config\n");
+		pr_perror("Path not found in config");
 		return EXIT_FAILURE;
 	}
 	char *cmd = YAJL_GET_STRING(v_cmd);
 
 	char *cmd_file_name = basename(cmd);
 	if (strcmp("init", cmd_file_name) && strcmp("systemd", cmd_file_name)) {
-		pr_pinfo("Skipping as container command is %s, not init or systemd\n", cmd);
+		pr_pdebug("Skipping as container command is %s, not init or systemd\n", cmd);
 		return EXIT_SUCCESS;
 	}
 #endif
@@ -468,18 +579,18 @@ int main(int argc, char *argv[])
 	const char *mount_label_path[] = { "MountLabel", (const char *)0 };
 	yajl_val v_mount = yajl_tree_get(config_node, mount_label_path, yajl_t_string);
 	if (!v_mount) {
-		pr_perror("MountLabel not found in config\n");
+		pr_perror("MountLabel not found in config");
 		return EXIT_FAILURE;
 	}
 	char *mount_label = YAJL_GET_STRING(v_mount);
 
-	pr_pinfo("Mount Label parsed as: %s\n", mount_label);
+	pr_pdebug("Mount Label parsed as: %s", mount_label);
 
 	/* Extract values from the config json */
 	const char *mount_points_path[] = { "MountPoints", (const char *)0 };
 	yajl_val v_mps = yajl_tree_get(config_node, mount_points_path, yajl_t_object);
 	if (!v_mps) {
-		pr_perror("MountPoints not found in config\n");
+		pr_perror("MountPoints not found in config");
 		return EXIT_FAILURE;
 	}
 
@@ -494,7 +605,7 @@ int main(int argc, char *argv[])
 			return EXIT_FAILURE;
 		}
 	} else {
-		pr_perror("command not recognized: %s\n", argv[1]);
+		pr_perror("command not recognized: %s", argv[1]);
 		return EXIT_FAILURE;
 	}
 
