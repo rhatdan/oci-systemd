@@ -1,0 +1,32 @@
+#! /bin/sh
+
+# Bind Mount Cgroup hierarchy under /run/docker
+mountcgroup() {
+    for m in $1;do
+	mkdir -p /run/docker${m}
+	[ -f /usr/bin/chcon ] || chcon -t svirt_sandbox_file_t -l s0 /run/docker/sys/fs/cgroup 2> /dev/null
+	findmnt /run/docker${m} > /dev/null || mount --bind $2 ${m} /run/docker${m}
+    done
+}
+
+umountcgroup() {
+    for m in $1 $2;do
+    	  umount /run/docker${m};
+    done
+}
+
+# Find All Mounted Cgroups except systemd. Need to mount read-only
+CGROUPS=$(findmnt -nlR /sys/fs/cgroup -o TARGET | grep -v systemd | tail -n +2)
+
+# Find Systemd Mounted Cgroups except systemd. Need to mount read-write
+SYSTEMD=$(findmnt -nlR /sys/fs/cgroup -o TARGET | grep systemd)
+
+# If user specified umount the remove mounts
+if [ "$1"  = umount ]; then 
+    exit $(umountcgroup ${CGROUPS} ${SYSTEMD})
+fi
+
+mountcgroup "${CGROUPS}" "-o ro"
+mountcgroup "${SYSTEMD}" ""
+
+echo "--stop-signal=RTMIN+3 -v /run/docker/sys/fs/cgroup:/sys/fs/cgroup:ro"
