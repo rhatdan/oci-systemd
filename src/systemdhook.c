@@ -18,6 +18,7 @@
 #include <linux/limits.h>
 #include <selinux/selinux.h>
 #include <yajl/yajl_tree.h>
+#include <stdbool.h>
 
 #include "config.h"
 
@@ -116,7 +117,7 @@ static int bind_mount(const char *src, const char *dest, int readonly) {
 	return 0;
 }
 
-static int chcon(const char *path, const char *label) {
+static int chperm(const char *path, const char *label, int uid, int gid, bool doChown) {
 	DIR *dir;
 	struct dirent *ent;
 	if ((dir = opendir (path)) != NULL) {
@@ -124,13 +125,19 @@ static int chcon(const char *path, const char *label) {
 		while ((ent = readdir (dir)) != NULL) {
 			_cleanup_free_ char *full_path = NULL;
 			if (asprintf(&full_path, "%s/%s", path, ent->d_name) < 0) {
-				pr_perror("Failed to create path for chcon");
+				pr_perror("Failed to create path for chperm");
 				closedir(dir);
 				return -1;
-
 			}
 			if (setfilecon (full_path, label) < 0) {
-				pr_perror("Failed to set context %s on %s", label, path);
+				pr_perror("Failed to set context %s on %s", label, full_path);
+			}
+
+			if (doChown) {
+				/* Change uid and gid to something the container can handle */
+				if (chown(full_path, uid, gid) < 0 ) {
+					pr_perror("Failed to chown %d:%d to full_path owner: %s", uid, gid, full_path);
+				}
 			}
 		}
 		closedir (dir);
@@ -199,7 +206,7 @@ static char *get_process_cgroup_subsystem_path(int pid, const char *subsystem) {
 		pr_pdebug("%s", ptr);
 		ptr++;
 		if (!strncmp(ptr, subsystem, strlen(subsystem))) {
-			pr_pdebug("Found");
+			pr_pdebug("Found cgroup");
 			char *path = strchr(ptr, '/');
 			if (path == NULL) {
 				pr_perror("Error finding path in cgroup: %s", line);
@@ -320,6 +327,8 @@ static int move_mounts(const char *rootfs,
 		       const char *path,
 		       const char **config_mounts,
 		       unsigned config_mounts_len,
+		       int uid,
+		       int gid,
 		       char *options
 	) {
 
@@ -366,6 +375,9 @@ static int move_mounts(const char *rootfs,
 			pr_perror("Failed to move mount %s to %s", tmp_dir, mount_dir);
 			return -1;
 		}
+		if (chown(mount_dir, uid, gid) < 0 ) {
+			pr_perror("Failed to chown %d:%d to mount_dir owner: %s", uid, gid, mount_dir);
+		}
 	}
 
 	/* Remove the temp directory for PATH */
@@ -381,7 +393,9 @@ static int prestart(const char *rootfs,
 		int pid,
 		const char *mount_label,
 		const char **config_mounts,
-		unsigned config_mounts_len)
+		unsigned config_mounts_len,
+		int uid,
+		int gid)
 {
 	_cleanup_close_  int fd = -1;
 	_cleanup_free_   char *options = NULL;
@@ -420,7 +434,7 @@ static int prestart(const char *rootfs,
 		return -1;
 	}
 
-	rc = move_mounts(rootfs, "/run", config_mounts, config_mounts_len, options);
+	rc = move_mounts(rootfs, "/run", config_mounts, config_mounts_len, uid, gid, options);
 	if (rc < 0) {
 		return rc;
 	}
@@ -500,17 +514,18 @@ static int prestart(const char *rootfs,
 		    (errno == EEXIST)) {
 			snprintf(cont_journal_dir, PATH_MAX, "%s%s", rootfs, journal_dir);
 			/* Mount tmpfs at /var/log/journal for systemd */
-			rc = move_mounts(rootfs, "/var/log/journal", config_mounts, config_mounts_len, options);
+			rc = move_mounts(rootfs, "/var/log/journal", config_mounts, config_mounts_len, uid, gid, options);
 			if (rc < 0) {
 				return rc;
 			}
 		} else {
 			/* If you can't create /var/log/journal inside of rootfs,
-			   crate /run/journal instead, systemd should write here
+			   create /run/journal instead, systemd should write here
 			   if it is not allowed to write to /var/log/journal
 			*/
 			snprintf(cont_journal_dir, PATH_MAX, "%s/run/journal/%.32s", rootfs, id);
 		}
+
 		if ((makepath(cont_journal_dir, 0755) == -1) &&
 		    (errno != EEXIST)) {
 			pr_perror("Failed to mkdir container journal dir: %s", cont_journal_dir);
@@ -519,6 +534,11 @@ static int prestart(const char *rootfs,
 
 		/* Mount journal directory at cont_journal_dir path in the container */
 		if (bind_mount(journal_dir, cont_journal_dir, false) == -1) {
+			return -1;
+		}
+
+		/* Change perms, uid and gid to something the container can handle */
+		if (chperm(cont_journal_dir, mount_label, uid, gid, true) < 0) {
 			return -1;
 		}
 	}
@@ -544,7 +564,7 @@ static int prestart(const char *rootfs,
 		}
 
 		/* Mount tmpfs at /tmp for systemd */
-		rc = move_mounts(rootfs, "/tmp", config_mounts, config_mounts_len, options);
+		rc = move_mounts(rootfs, "/tmp", config_mounts, config_mounts_len, uid, gid, options);
 		if (rc < 0) {
 			return rc;
 		}
@@ -592,7 +612,21 @@ static int prestart(const char *rootfs,
 		pr_perror("Failed to bind mount %s on %s", CGROUP_SYSTEMD, systemd_named_path);
 		return -1;
 	}
-	if (chcon(systemd_named_path, mount_label) < 0) {
+
+	/*** 
+	* chown will fail on /var/lib/docker files as they are not on the
+	* container so let's pass false to not have it done in the chperm
+	* function.
+        ***/ 
+	if (chperm(systemd_named_path, mount_label, uid, gid, false) < 0) {
+		return -1;
+	}
+
+	/***
+	* chown files in the /sys/fs/cgroup directory paths to the
+	* container's uid and gid, so let's pass true here.
+	***/	 
+	if (chperm(named_path, mount_label, uid, gid, true) < 0) {
 		return -1;
 	}
 
@@ -819,11 +853,74 @@ int main(int argc, char *argv[])
 	char *mount_label = NULL;
 	const char **config_mounts = NULL;
 	unsigned config_mounts_len = 0;
+	unsigned array_len = 0;
 
 	/* Extract values from the config json */
 	const char *mount_label_path[] = { "linux", "mountLabel", (const char *)0 };
 	yajl_val v_mount = yajl_tree_get(config_node, mount_label_path, yajl_t_string);
 	mount_label = v_mount ? YAJL_GET_STRING(v_mount) : "";
+
+	/* Get the gid value. */
+	int gid = -1;
+	const char *gid_mappings[] = {"linux", "gidMappings", (const char *)0 };
+	yajl_val v_gidMappings = yajl_tree_get(config_node, gid_mappings, yajl_t_array);
+	if (!v_gidMappings) {
+		pr_pinfo("gidMappings not found in config");
+		gid=0;
+	}
+
+	const char *container_path[] = {"containerID", (const char *)0 };
+	if (gid != 0) {
+		array_len = YAJL_GET_ARRAY(v_gidMappings)->len;
+		if (array_len < 1) {
+			pr_perror("No gid for containers found");
+			return EXIT_FAILURE;
+		}
+
+		const char *gid_path[] = {"hostID", (const char *)0 };
+		for (unsigned int i = 0; i < array_len; i++) {
+			yajl_val v_gidMappings_values = YAJL_GET_ARRAY(v_gidMappings)->values[i];
+			yajl_val v_containerId = yajl_tree_get(v_gidMappings_values, container_path, yajl_t_number);
+			if (YAJL_GET_INTEGER(v_containerId) == 0) {
+				yajl_val v_gid = yajl_tree_get(v_gidMappings_values, gid_path, yajl_t_number);
+				gid = v_gid ? YAJL_GET_INTEGER(v_gid) : -1;
+				i = array_len;
+			}
+		}
+	} /* End if (gid!=0) */
+
+	pr_pdebug("GID: %d", gid);
+
+	/* Get the uid value. */
+	int uid = -1;
+	const char *uid_mappings[] = {"linux", "uidMappings", (const char *)0 };
+	yajl_val v_uidMappings = yajl_tree_get(config_node, uid_mappings, yajl_t_array);
+	if (!v_uidMappings) {
+		pr_pinfo("uidMappings not found in config");
+		uid = 0;
+	}
+
+	if (uid !=0) {
+		array_len = YAJL_GET_ARRAY(v_uidMappings)->len;
+		if (array_len < 1) {
+			pr_perror("No uid for containers found");
+			return EXIT_FAILURE;
+		}
+
+		const char *uid_path[] = {"hostID", (const char *)0 };
+		for (unsigned int i = 0; i < array_len; i++) {
+			yajl_val v_uidMappings_values = YAJL_GET_ARRAY(v_uidMappings)->values[i];
+			yajl_val v_containerId = yajl_tree_get(v_uidMappings_values, container_path, yajl_t_number);
+			if (YAJL_GET_INTEGER(v_containerId) == 0) {
+				yajl_val v_uid = yajl_tree_get(v_uidMappings_values, uid_path, yajl_t_number);
+				uid = v_uid ? YAJL_GET_INTEGER(v_uid) : -1;
+				i = array_len;
+			}
+		}
+	} /* End if (uid !=0) */
+
+	pr_pdebug("UID: %d", uid);
+
 
 	const char *mount_points_path[] = {"mounts", (const char *)0 };
 	yajl_val v_mounts = yajl_tree_get(config_node, mount_points_path, yajl_t_array);
@@ -897,7 +994,7 @@ int main(int argc, char *argv[])
 	/* OCI hooks set target_pid to 0 on poststop, as the container process already
 	   exited.  If target_pid is bigger than 0 then it is the prestart hook.  */
 	if ((argc > 2 && !strcmp("prestart", argv[1])) || target_pid) {
-		if (prestart(rootfs, id, target_pid, mount_label, config_mounts, config_mounts_len) != 0) {
+		if (prestart(rootfs, id, target_pid, mount_label, config_mounts, config_mounts_len, uid, gid) != 0) {
 			return EXIT_FAILURE;
 		}
 	} else if ((argc > 2 && !strcmp("poststop", argv[1])) || (target_pid == 0)) {
