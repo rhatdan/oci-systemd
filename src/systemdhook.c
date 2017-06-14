@@ -822,8 +822,12 @@ int main(int argc, char *argv[])
 		snprintf(config_file_name, PATH_MAX, "%s/config.json", YAJL_GET_STRING(v_bundle_path));
 		fp = fopen(config_file_name, "r");
 	} else {
-		char msg[] = "bundlePath not found in state";
-		snprintf(config_file_name, PATH_MAX, "%s", msg);
+		/****
+		* On Docker versions prior to 1.12, bundlePath will not
+		* be provided.  Let's exit quietly if not found.
+		****/
+		pr_pinfo("Failed reading state data: bundlePath not found.  Generally this indicates Docker versions prior to 1.12 are installed.");
+		return EXIT_SUCCESS;
 	}
 
 	if (fp == NULL) {
