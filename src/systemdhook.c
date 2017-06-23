@@ -790,15 +790,6 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	/* Extract values from the state json */
-	const char *root_path[] = { "root", (const char *)0 };
-	yajl_val v_root = yajl_tree_get(node, root_path, yajl_t_string);
-	if (!v_root) {
-		pr_perror("root not found in state");
-		return EXIT_FAILURE;
-	}
-	char *rootfs = YAJL_GET_STRING(v_root);
-
 	const char *pid_path[] = { "pid", (const char *) 0 };
 	yajl_val v_pid = yajl_tree_get(node, pid_path, yajl_t_number);
 	if (!v_pid) {
@@ -815,13 +806,14 @@ int main(int argc, char *argv[])
 	}
 	char *id = YAJL_GET_STRING(v_id);
 
-	/* 'bundlePath' must be specified for the OCI hooks, and from there we read the configuration file */
-	const char *bundle_path[] = { "bundlePath", (const char *)0 };
+	/* 'bundle' must be specified for the OCI hooks, and from there we read the configuration file */
+	const char *bundle_path[] = { "bundle", (const char *)0 };
 	yajl_val v_bundle_path = yajl_tree_get(node, bundle_path, yajl_t_string);
-	if (v_bundle_path) {
-		snprintf(config_file_name, PATH_MAX, "%s/config.json", YAJL_GET_STRING(v_bundle_path));
-		fp = fopen(config_file_name, "r");
-	} else {
+	if (!v_bundle_path) {
+		const char *bundle_path[] = { "bundlePath", (const char *)0 };
+		v_bundle_path = yajl_tree_get(node, bundle_path, yajl_t_string);
+	}
+	if (!v_bundle_path) {
 		/****
 		* On Docker versions prior to 1.12, bundlePath will not
 		* be provided.  Let's exit quietly if not found.
@@ -829,6 +821,8 @@ int main(int argc, char *argv[])
 		pr_pinfo("Failed reading state data: bundlePath not found.  Generally this indicates Docker versions prior to 1.12 are installed.");
 		return EXIT_SUCCESS;
 	}
+	snprintf(config_file_name, PATH_MAX, "%s/config.json", YAJL_GET_STRING(v_bundle_path));
+	fp = fopen(config_file_name, "r");
 
 	if (fp == NULL) {
 		pr_perror("Failed to open config file: %s", config_file_name);
@@ -853,6 +847,16 @@ int main(int argc, char *argv[])
 		}
 		return EXIT_FAILURE;
 	}
+
+	/* Extract values from the config json */
+	const char *root_path[] = { "root", "path", (const char *)0 };
+	yajl_val v_root = yajl_tree_get(config_node, root_path, yajl_t_string);
+	if (!v_root) {
+		pr_perror("root not found in config.json");
+		return EXIT_FAILURE;
+	}
+	char *rootfs = YAJL_GET_STRING(v_root);
+
 
 	char *mount_label = NULL;
 	const char **config_mounts = NULL;
