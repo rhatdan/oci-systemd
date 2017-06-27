@@ -613,11 +613,11 @@ static int prestart(const char *rootfs,
 		return -1;
 	}
 
-	/*** 
+	/***
 	* chown will fail on /var/lib/docker files as they are not on the
 	* container so let's pass false to not have it done in the chperm
 	* function.
-        ***/ 
+	***/
 	if (chperm(systemd_named_path, mount_label, uid, gid, false) < 0) {
 		return -1;
 	}
@@ -625,7 +625,7 @@ static int prestart(const char *rootfs,
 	/***
 	* chown files in the /sys/fs/cgroup directory paths to the
 	* container's uid and gid, so let's pass true here.
-	***/	 
+	***/
 	if (chperm(named_path, mount_label, uid, gid, true) < 0) {
 		return -1;
 	}
@@ -874,11 +874,12 @@ int main(int argc, char *argv[])
 	const char *root_path[] = { "root", "path", (const char *)0 };
 	yajl_val v_root = yajl_tree_get(config_node, root_path, yajl_t_string);
 	if (!v_root) {
-		pr_perror("root not found in config.json");
+		pr_perror("root path not found in config.json");
 		return EXIT_FAILURE;
 	}
 	char *rootfs = YAJL_GET_STRING(v_root);
 
+	pr_pdebug("rootfs=%s", rootfs);
 	const char **config_mounts = NULL;
 	unsigned config_mounts_len = 0;
 	unsigned array_len = 0;
@@ -929,7 +930,15 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if ((argc > 2 && !strcmp("prestart", argv[1])) ||
+	/* OCI hooks set target_pid to 0 on poststop, as the container process
+	   already exited.  If target_pid is bigger than 0 then it is a start
+	   hook.
+	   In most cases the calling program should pass in a argv[1] option,
+	   like prestart, poststart or poststop.  In certain cases we also
+	   support passing of no argv[1], and then default to prestart if the
+	   target_pid != 0, poststop if target_pid == 0.
+	*/
+	if ((argc >= 2 && !strcmp("prestart", argv[1])) ||
 	    (argc == 1 && target_pid)) {
 
 		char *mount_label = NULL;
@@ -943,7 +952,7 @@ int main(int argc, char *argv[])
 		const char *gid_mappings[] = {"linux", "gidMappings", (const char *)0 };
 		yajl_val v_gidMappings = yajl_tree_get(config_node, gid_mappings, yajl_t_array);
 		if (!v_gidMappings) {
-			pr_pinfo("gidMappings not found in config");
+			pr_pdebug("gidMappings not found in config");
 			gid=0;
 		}
 
@@ -951,7 +960,7 @@ int main(int argc, char *argv[])
 		if (gid != 0) {
 			array_len = YAJL_GET_ARRAY(v_gidMappings)->len;
 			if (array_len < 1) {
-				pr_perror("No gid for containers found");
+				pr_perror("No gid for container found");
 				return EXIT_FAILURE;
 			}
 
@@ -974,14 +983,14 @@ int main(int argc, char *argv[])
 		const char *uid_mappings[] = {"linux", "uidMappings", (const char *)0 };
 		yajl_val v_uidMappings = yajl_tree_get(config_node, uid_mappings, yajl_t_array);
 		if (!v_uidMappings) {
-			pr_pinfo("uidMappings not found in config");
+			pr_pdebug("uidMappings not found in config");
 			uid = 0;
 		}
 
 		if (uid !=0) {
 			array_len = YAJL_GET_ARRAY(v_uidMappings)->len;
 			if (array_len < 1) {
-				pr_perror("No uid for containers found");
+				pr_perror("No uid for container found");
 				return EXIT_FAILURE;
 			}
 
@@ -1002,13 +1011,16 @@ int main(int argc, char *argv[])
 		if (prestart(rootfs, id, target_pid, mount_label, config_mounts, config_mounts_len, uid, gid) != 0) {
 			return EXIT_FAILURE;
 		}
-	} else if ((argc > 2 && !strcmp("poststop", argv[1])) ||
+	/* If caller did not specify argv[1], and target_pid == 0, we default
+	   to postop.
+	*/
+	} else if ((argc >= 2 && !strcmp("poststop", argv[1])) ||
 		   (argc == 1 && target_pid == 0)) {
 		if (poststop(rootfs, config_mounts, config_mounts_len) != 0) {
 			return EXIT_FAILURE;
 		}
 	} else {
-		if (argc > 2) {
+		if (argc >= 2) {
 			pr_pdebug("%s ignored", argv[1]);
 		} else {
 			pr_pdebug("No args ignoring");
