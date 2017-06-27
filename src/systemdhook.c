@@ -848,6 +848,28 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
+	const char *args_path[] = {"process", "args", (const char *)0 };
+	yajl_val v_args = yajl_tree_get(config_node, args_path, yajl_t_array);
+	if (!v_args) {
+		pr_perror("args not found in config");
+		return EXIT_FAILURE;
+	}
+#if ARGS_CHECK
+	char *cmd = NULL;
+	yajl_val v_arg0_value = YAJL_GET_ARRAY(v_args)->values[0];
+	cmd = YAJL_GET_STRING(v_arg0_value);
+	/* Don't do anything if init is actually container runtime bind mounted /dev/init */
+	if (!strcmp(cmd, "/dev/init")) {
+		pr_pdebug("Skipping as container command is /dev/init, not systemd init\n");
+		return EXIT_SUCCESS;
+	}
+	char *cmd_file_name = basename(cmd);
+	if (strcmp("init", cmd_file_name) && strcmp("systemd", cmd_file_name)) {
+		pr_pdebug("Skipping as container command is %s, not init or systemd\n", cmd);
+		return EXIT_SUCCESS;
+	}
+#endif
+
 	/* Extract values from the config json */
 	const char *root_path[] = { "root", "path", (const char *)0 };
 	yajl_val v_root = yajl_tree_get(config_node, root_path, yajl_t_string);
@@ -956,13 +978,6 @@ int main(int argc, char *argv[])
 		config_mounts[i] = YAJL_GET_STRING(v_destination);
 	}
 
-	const char *args_path[] = {"process", "args", (const char *)0 };
-	yajl_val v_args = yajl_tree_get(config_node, args_path, yajl_t_array);
-	if (!v_args) {
-		pr_perror("args not found in config");
-		return EXIT_FAILURE;
-	}
-
 	const char *envs[] = {"process", "env", (const char *)0 };
 	yajl_val v_envs = yajl_tree_get(config_node, envs, yajl_t_array);
 	if (v_envs) {
@@ -982,22 +997,6 @@ int main(int argc, char *argv[])
 			}
 		}
 	}
-
-#if ARGS_CHECK
-	char *cmd = NULL;
-	yajl_val v_arg0_value = YAJL_GET_ARRAY(v_args)->values[0];
-	cmd = YAJL_GET_STRING(v_arg0_value);
-	/* Don't do anything if init is actually container runtime bind mounted /dev/init */
-	if (!strcmp(cmd, "/dev/init")) {
-		pr_pdebug("Skipping as container command is /dev/init, not systemd init\n");
-		return EXIT_SUCCESS;
-	}
-	char *cmd_file_name = basename(cmd);
-	if (strcmp("init", cmd_file_name) && strcmp("systemd", cmd_file_name)) {
-		pr_pdebug("Skipping as container command is %s, not init or systemd\n", cmd);
-		return EXIT_SUCCESS;
-	}
-#endif
 
 	if ((argc > 2 && !strcmp("prestart", argv[1])) ||
 	    (argc == 1 && target_pid)) {
