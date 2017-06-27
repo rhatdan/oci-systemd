@@ -999,19 +999,22 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	/* OCI hooks set target_pid to 0 on poststop, as the container process already
-	   exited.  If target_pid is bigger than 0 then it is the prestart hook.  */
-	if ((argc > 2 && !strcmp("prestart", argv[1])) || target_pid) {
+	if ((argc > 2 && !strcmp("prestart", argv[1])) ||
+	    (argc == 1 && target_pid)) {
 		if (prestart(rootfs, id, target_pid, mount_label, config_mounts, config_mounts_len, uid, gid) != 0) {
 			return EXIT_FAILURE;
 		}
-	} else if ((argc > 2 && !strcmp("poststop", argv[1])) || (target_pid == 0)) {
+	} else if ((argc > 2 && !strcmp("poststop", argv[1])) ||
+		   (argc == 1 && target_pid == 0)) {
 		if (poststop(rootfs, config_mounts, config_mounts_len) != 0) {
 			return EXIT_FAILURE;
 		}
 	} else {
-		pr_perror("command not recognized: %s", argv[1]);
-		return EXIT_FAILURE;
+		if (argc > 2) {
+			pr_pdebug("%s ignored", argv[1]);
+		} else {
+			pr_pdebug("No args ignoring");
+		}
 	}
 
 	return EXIT_SUCCESS;
