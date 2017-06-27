@@ -879,78 +879,9 @@ int main(int argc, char *argv[])
 	}
 	char *rootfs = YAJL_GET_STRING(v_root);
 
-
-	char *mount_label = NULL;
 	const char **config_mounts = NULL;
 	unsigned config_mounts_len = 0;
 	unsigned array_len = 0;
-
-	/* Extract values from the config json */
-	const char *mount_label_path[] = { "linux", "mountLabel", (const char *)0 };
-	yajl_val v_mount = yajl_tree_get(config_node, mount_label_path, yajl_t_string);
-	mount_label = v_mount ? YAJL_GET_STRING(v_mount) : "";
-
-	/* Get the gid value. */
-	int gid = -1;
-	const char *gid_mappings[] = {"linux", "gidMappings", (const char *)0 };
-	yajl_val v_gidMappings = yajl_tree_get(config_node, gid_mappings, yajl_t_array);
-	if (!v_gidMappings) {
-		pr_pinfo("gidMappings not found in config");
-		gid=0;
-	}
-
-	const char *container_path[] = {"containerID", (const char *)0 };
-	if (gid != 0) {
-		array_len = YAJL_GET_ARRAY(v_gidMappings)->len;
-		if (array_len < 1) {
-			pr_perror("No gid for containers found");
-			return EXIT_FAILURE;
-		}
-
-		const char *gid_path[] = {"hostID", (const char *)0 };
-		for (unsigned int i = 0; i < array_len; i++) {
-			yajl_val v_gidMappings_values = YAJL_GET_ARRAY(v_gidMappings)->values[i];
-			yajl_val v_containerId = yajl_tree_get(v_gidMappings_values, container_path, yajl_t_number);
-			if (YAJL_GET_INTEGER(v_containerId) == 0) {
-				yajl_val v_gid = yajl_tree_get(v_gidMappings_values, gid_path, yajl_t_number);
-				gid = v_gid ? YAJL_GET_INTEGER(v_gid) : -1;
-				i = array_len;
-			}
-		}
-	} /* End if (gid!=0) */
-
-	pr_pdebug("GID: %d", gid);
-
-	/* Get the uid value. */
-	int uid = -1;
-	const char *uid_mappings[] = {"linux", "uidMappings", (const char *)0 };
-	yajl_val v_uidMappings = yajl_tree_get(config_node, uid_mappings, yajl_t_array);
-	if (!v_uidMappings) {
-		pr_pinfo("uidMappings not found in config");
-		uid = 0;
-	}
-
-	if (uid !=0) {
-		array_len = YAJL_GET_ARRAY(v_uidMappings)->len;
-		if (array_len < 1) {
-			pr_perror("No uid for containers found");
-			return EXIT_FAILURE;
-		}
-
-		const char *uid_path[] = {"hostID", (const char *)0 };
-		for (unsigned int i = 0; i < array_len; i++) {
-			yajl_val v_uidMappings_values = YAJL_GET_ARRAY(v_uidMappings)->values[i];
-			yajl_val v_containerId = yajl_tree_get(v_uidMappings_values, container_path, yajl_t_number);
-			if (YAJL_GET_INTEGER(v_containerId) == 0) {
-				yajl_val v_uid = yajl_tree_get(v_uidMappings_values, uid_path, yajl_t_number);
-				uid = v_uid ? YAJL_GET_INTEGER(v_uid) : -1;
-				i = array_len;
-			}
-		}
-	} /* End if (uid !=0) */
-
-	pr_pdebug("UID: %d", uid);
-
 
 	const char *mount_points_path[] = {"mounts", (const char *)0 };
 	yajl_val v_mounts = yajl_tree_get(config_node, mount_points_path, yajl_t_array);
@@ -1000,6 +931,74 @@ int main(int argc, char *argv[])
 
 	if ((argc > 2 && !strcmp("prestart", argv[1])) ||
 	    (argc == 1 && target_pid)) {
+
+		char *mount_label = NULL;
+		/* Extract values from the config json */
+		const char *mount_label_path[] = { "linux", "mountLabel", (const char *)0 };
+		yajl_val v_mount = yajl_tree_get(config_node, mount_label_path, yajl_t_string);
+		mount_label = v_mount ? YAJL_GET_STRING(v_mount) : "";
+
+		/* Get the gid value. */
+		int gid = -1;
+		const char *gid_mappings[] = {"linux", "gidMappings", (const char *)0 };
+		yajl_val v_gidMappings = yajl_tree_get(config_node, gid_mappings, yajl_t_array);
+		if (!v_gidMappings) {
+			pr_pinfo("gidMappings not found in config");
+			gid=0;
+		}
+
+		const char *container_path[] = {"containerID", (const char *)0 };
+		if (gid != 0) {
+			array_len = YAJL_GET_ARRAY(v_gidMappings)->len;
+			if (array_len < 1) {
+				pr_perror("No gid for containers found");
+				return EXIT_FAILURE;
+			}
+
+			const char *gid_path[] = {"hostID", (const char *)0 };
+			for (unsigned int i = 0; i < array_len; i++) {
+				yajl_val v_gidMappings_values = YAJL_GET_ARRAY(v_gidMappings)->values[i];
+				yajl_val v_containerId = yajl_tree_get(v_gidMappings_values, container_path, yajl_t_number);
+				if (YAJL_GET_INTEGER(v_containerId) == 0) {
+					yajl_val v_gid = yajl_tree_get(v_gidMappings_values, gid_path, yajl_t_number);
+					gid = v_gid ? YAJL_GET_INTEGER(v_gid) : -1;
+					i = array_len;
+				}
+			}
+		} /* End if (gid!=0) */
+
+		pr_pdebug("GID: %d", gid);
+
+		/* Get the uid value. */
+		int uid = -1;
+		const char *uid_mappings[] = {"linux", "uidMappings", (const char *)0 };
+		yajl_val v_uidMappings = yajl_tree_get(config_node, uid_mappings, yajl_t_array);
+		if (!v_uidMappings) {
+			pr_pinfo("uidMappings not found in config");
+			uid = 0;
+		}
+
+		if (uid !=0) {
+			array_len = YAJL_GET_ARRAY(v_uidMappings)->len;
+			if (array_len < 1) {
+				pr_perror("No uid for containers found");
+				return EXIT_FAILURE;
+			}
+
+			const char *uid_path[] = {"hostID", (const char *)0 };
+			for (unsigned int i = 0; i < array_len; i++) {
+				yajl_val v_uidMappings_values = YAJL_GET_ARRAY(v_uidMappings)->values[i];
+				yajl_val v_containerId = yajl_tree_get(v_uidMappings_values, container_path, yajl_t_number);
+				if (YAJL_GET_INTEGER(v_containerId) == 0) {
+					yajl_val v_uid = yajl_tree_get(v_uidMappings_values, uid_path, yajl_t_number);
+					uid = v_uid ? YAJL_GET_INTEGER(v_uid) : -1;
+					i = array_len;
+				}
+			}
+		} /* End if (uid !=0) */
+
+		pr_pdebug("UID: %d", uid);
+
 		if (prestart(rootfs, id, target_pid, mount_label, config_mounts, config_mounts_len, uid, gid) != 0) {
 			return EXIT_FAILURE;
 		}
