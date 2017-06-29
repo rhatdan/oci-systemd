@@ -613,11 +613,11 @@ static int prestart(const char *rootfs,
 		return -1;
 	}
 
-	/*** 
+	/***
 	* chown will fail on /var/lib/docker files as they are not on the
 	* container so let's pass false to not have it done in the chperm
 	* function.
-        ***/ 
+	***/
 	if (chperm(systemd_named_path, mount_label, uid, gid, false) < 0) {
 		return -1;
 	}
@@ -625,7 +625,7 @@ static int prestart(const char *rootfs,
 	/***
 	* chown files in the /sys/fs/cgroup directory paths to the
 	* container's uid and gid, so let's pass true here.
-	***/	 
+	***/
 	if (chperm(named_path, mount_label, uid, gid, true) < 0) {
 		return -1;
 	}
@@ -790,15 +790,6 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	/* Extract values from the state json */
-	const char *root_path[] = { "root", (const char *)0 };
-	yajl_val v_root = yajl_tree_get(node, root_path, yajl_t_string);
-	if (!v_root) {
-		pr_perror("root not found in state");
-		return EXIT_FAILURE;
-	}
-	char *rootfs = YAJL_GET_STRING(v_root);
-
 	const char *pid_path[] = { "pid", (const char *) 0 };
 	yajl_val v_pid = yajl_tree_get(node, pid_path, yajl_t_number);
 	if (!v_pid) {
@@ -815,13 +806,14 @@ int main(int argc, char *argv[])
 	}
 	char *id = YAJL_GET_STRING(v_id);
 
-	/* 'bundlePath' must be specified for the OCI hooks, and from there we read the configuration file */
-	const char *bundle_path[] = { "bundlePath", (const char *)0 };
+	/* 'bundle' must be specified for the OCI hooks, and from there we read the configuration file */
+	const char *bundle_path[] = { "bundle", (const char *)0 };
 	yajl_val v_bundle_path = yajl_tree_get(node, bundle_path, yajl_t_string);
-	if (v_bundle_path) {
-		snprintf(config_file_name, PATH_MAX, "%s/config.json", YAJL_GET_STRING(v_bundle_path));
-		fp = fopen(config_file_name, "r");
-	} else {
+	if (!v_bundle_path) {
+		const char *bundle_path[] = { "bundlePath", (const char *)0 };
+		v_bundle_path = yajl_tree_get(node, bundle_path, yajl_t_string);
+	}
+	if (!v_bundle_path) {
 		/****
 		* On Docker versions prior to 1.12, bundlePath will not
 		* be provided.  Let's exit quietly if not found.
@@ -829,6 +821,8 @@ int main(int argc, char *argv[])
 		pr_pinfo("Failed reading state data: bundlePath not found.  Generally this indicates Docker versions prior to 1.12 are installed.");
 		return EXIT_SUCCESS;
 	}
+	snprintf(config_file_name, PATH_MAX, "%s/config.json", YAJL_GET_STRING(v_bundle_path));
+	fp = fopen(config_file_name, "r");
 
 	if (fp == NULL) {
 		pr_perror("Failed to open config file: %s", config_file_name);
@@ -854,77 +848,41 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	char *mount_label = NULL;
+	const char *args_path[] = {"process", "args", (const char *)0 };
+	yajl_val v_args = yajl_tree_get(config_node, args_path, yajl_t_array);
+	if (!v_args) {
+		pr_perror("args not found in config");
+		return EXIT_FAILURE;
+	}
+#if ARGS_CHECK
+	char *cmd = NULL;
+	yajl_val v_arg0_value = YAJL_GET_ARRAY(v_args)->values[0];
+	cmd = YAJL_GET_STRING(v_arg0_value);
+	/* Don't do anything if init is actually container runtime bind mounted /dev/init */
+	if (!strcmp(cmd, "/dev/init")) {
+		pr_pdebug("Skipping as container command is /dev/init, not systemd init\n");
+		return EXIT_SUCCESS;
+	}
+	char *cmd_file_name = basename(cmd);
+	if (strcmp("init", cmd_file_name) && strcmp("systemd", cmd_file_name)) {
+		pr_pdebug("Skipping as container command is %s, not init or systemd\n", cmd);
+		return EXIT_SUCCESS;
+	}
+#endif
+
+	/* Extract values from the config json */
+	const char *root_path[] = { "root", "path", (const char *)0 };
+	yajl_val v_root = yajl_tree_get(config_node, root_path, yajl_t_string);
+	if (!v_root) {
+		pr_perror("root path not found in config.json");
+		return EXIT_FAILURE;
+	}
+	char *rootfs = YAJL_GET_STRING(v_root);
+
+	pr_pdebug("rootfs=%s", rootfs);
 	const char **config_mounts = NULL;
 	unsigned config_mounts_len = 0;
 	unsigned array_len = 0;
-
-	/* Extract values from the config json */
-	const char *mount_label_path[] = { "linux", "mountLabel", (const char *)0 };
-	yajl_val v_mount = yajl_tree_get(config_node, mount_label_path, yajl_t_string);
-	mount_label = v_mount ? YAJL_GET_STRING(v_mount) : "";
-
-	/* Get the gid value. */
-	int gid = -1;
-	const char *gid_mappings[] = {"linux", "gidMappings", (const char *)0 };
-	yajl_val v_gidMappings = yajl_tree_get(config_node, gid_mappings, yajl_t_array);
-	if (!v_gidMappings) {
-		pr_pinfo("gidMappings not found in config");
-		gid=0;
-	}
-
-	const char *container_path[] = {"containerID", (const char *)0 };
-	if (gid != 0) {
-		array_len = YAJL_GET_ARRAY(v_gidMappings)->len;
-		if (array_len < 1) {
-			pr_perror("No gid for containers found");
-			return EXIT_FAILURE;
-		}
-
-		const char *gid_path[] = {"hostID", (const char *)0 };
-		for (unsigned int i = 0; i < array_len; i++) {
-			yajl_val v_gidMappings_values = YAJL_GET_ARRAY(v_gidMappings)->values[i];
-			yajl_val v_containerId = yajl_tree_get(v_gidMappings_values, container_path, yajl_t_number);
-			if (YAJL_GET_INTEGER(v_containerId) == 0) {
-				yajl_val v_gid = yajl_tree_get(v_gidMappings_values, gid_path, yajl_t_number);
-				gid = v_gid ? YAJL_GET_INTEGER(v_gid) : -1;
-				i = array_len;
-			}
-		}
-	} /* End if (gid!=0) */
-
-	pr_pdebug("GID: %d", gid);
-
-	/* Get the uid value. */
-	int uid = -1;
-	const char *uid_mappings[] = {"linux", "uidMappings", (const char *)0 };
-	yajl_val v_uidMappings = yajl_tree_get(config_node, uid_mappings, yajl_t_array);
-	if (!v_uidMappings) {
-		pr_pinfo("uidMappings not found in config");
-		uid = 0;
-	}
-
-	if (uid !=0) {
-		array_len = YAJL_GET_ARRAY(v_uidMappings)->len;
-		if (array_len < 1) {
-			pr_perror("No uid for containers found");
-			return EXIT_FAILURE;
-		}
-
-		const char *uid_path[] = {"hostID", (const char *)0 };
-		for (unsigned int i = 0; i < array_len; i++) {
-			yajl_val v_uidMappings_values = YAJL_GET_ARRAY(v_uidMappings)->values[i];
-			yajl_val v_containerId = yajl_tree_get(v_uidMappings_values, container_path, yajl_t_number);
-			if (YAJL_GET_INTEGER(v_containerId) == 0) {
-				yajl_val v_uid = yajl_tree_get(v_uidMappings_values, uid_path, yajl_t_number);
-				uid = v_uid ? YAJL_GET_INTEGER(v_uid) : -1;
-				i = array_len;
-			}
-		}
-	} /* End if (uid !=0) */
-
-	pr_pdebug("UID: %d", uid);
-
 
 	const char *mount_points_path[] = {"mounts", (const char *)0 };
 	yajl_val v_mounts = yajl_tree_get(config_node, mount_points_path, yajl_t_array);
@@ -952,13 +910,6 @@ int main(int argc, char *argv[])
 		config_mounts[i] = YAJL_GET_STRING(v_destination);
 	}
 
-	const char *args_path[] = {"process", "args", (const char *)0 };
-	yajl_val v_args = yajl_tree_get(config_node, args_path, yajl_t_array);
-	if (!v_args) {
-		pr_perror("args not found in config");
-		return EXIT_FAILURE;
-	}
-
 	const char *envs[] = {"process", "env", (const char *)0 };
 	yajl_val v_envs = yajl_tree_get(config_node, envs, yajl_t_array);
 	if (v_envs) {
@@ -979,35 +930,101 @@ int main(int argc, char *argv[])
 		}
 	}
 
-#if ARGS_CHECK
-	char *cmd = NULL;
-	yajl_val v_arg0_value = YAJL_GET_ARRAY(v_args)->values[0];
-	cmd = YAJL_GET_STRING(v_arg0_value);
-	/* Don't do anything if init is actually container runtime bind mounted /dev/init */
-	if (!strcmp(cmd, "/dev/init")) {
-		pr_pdebug("Skipping as container command is /dev/init, not systemd init\n");
-		return EXIT_SUCCESS;
-	}
-	char *cmd_file_name = basename(cmd);
-	if (strcmp("init", cmd_file_name) && strcmp("systemd", cmd_file_name)) {
-		pr_pdebug("Skipping as container command is %s, not init or systemd\n", cmd);
-		return EXIT_SUCCESS;
-	}
-#endif
+	/* OCI hooks set target_pid to 0 on poststop, as the container process
+	   already exited.  If target_pid is bigger than 0 then it is a start
+	   hook.
+	   In most cases the calling program should pass in a argv[1] option,
+	   like prestart, poststart or poststop.  In certain cases we also
+	   support passing of no argv[1], and then default to prestart if the
+	   target_pid != 0, poststop if target_pid == 0.
+	*/
+	if ((argc >= 2 && !strcmp("prestart", argv[1])) ||
+	    (argc == 1 && target_pid)) {
 
-	/* OCI hooks set target_pid to 0 on poststop, as the container process already
-	   exited.  If target_pid is bigger than 0 then it is the prestart hook.  */
-	if ((argc > 2 && !strcmp("prestart", argv[1])) || target_pid) {
+		char *mount_label = NULL;
+		/* Extract values from the config json */
+		const char *mount_label_path[] = { "linux", "mountLabel", (const char *)0 };
+		yajl_val v_mount = yajl_tree_get(config_node, mount_label_path, yajl_t_string);
+		mount_label = v_mount ? YAJL_GET_STRING(v_mount) : "";
+
+		/* Get the gid value. */
+		int gid = -1;
+		const char *gid_mappings[] = {"linux", "gidMappings", (const char *)0 };
+		yajl_val v_gidMappings = yajl_tree_get(config_node, gid_mappings, yajl_t_array);
+		if (!v_gidMappings) {
+			pr_pdebug("gidMappings not found in config");
+			gid=0;
+		}
+
+		const char *container_path[] = {"containerID", (const char *)0 };
+		if (gid != 0) {
+			array_len = YAJL_GET_ARRAY(v_gidMappings)->len;
+			if (array_len < 1) {
+				pr_perror("No gid for container found");
+				return EXIT_FAILURE;
+			}
+
+			const char *gid_path[] = {"hostID", (const char *)0 };
+			for (unsigned int i = 0; i < array_len; i++) {
+				yajl_val v_gidMappings_values = YAJL_GET_ARRAY(v_gidMappings)->values[i];
+				yajl_val v_containerId = yajl_tree_get(v_gidMappings_values, container_path, yajl_t_number);
+				if (YAJL_GET_INTEGER(v_containerId) == 0) {
+					yajl_val v_gid = yajl_tree_get(v_gidMappings_values, gid_path, yajl_t_number);
+					gid = v_gid ? YAJL_GET_INTEGER(v_gid) : -1;
+					i = array_len;
+				}
+			}
+		} /* End if (gid!=0) */
+
+		pr_pdebug("GID: %d", gid);
+
+		/* Get the uid value. */
+		int uid = -1;
+		const char *uid_mappings[] = {"linux", "uidMappings", (const char *)0 };
+		yajl_val v_uidMappings = yajl_tree_get(config_node, uid_mappings, yajl_t_array);
+		if (!v_uidMappings) {
+			pr_pdebug("uidMappings not found in config");
+			uid = 0;
+		}
+
+		if (uid !=0) {
+			array_len = YAJL_GET_ARRAY(v_uidMappings)->len;
+			if (array_len < 1) {
+				pr_perror("No uid for container found");
+				return EXIT_FAILURE;
+			}
+
+			const char *uid_path[] = {"hostID", (const char *)0 };
+			for (unsigned int i = 0; i < array_len; i++) {
+				yajl_val v_uidMappings_values = YAJL_GET_ARRAY(v_uidMappings)->values[i];
+				yajl_val v_containerId = yajl_tree_get(v_uidMappings_values, container_path, yajl_t_number);
+				if (YAJL_GET_INTEGER(v_containerId) == 0) {
+					yajl_val v_uid = yajl_tree_get(v_uidMappings_values, uid_path, yajl_t_number);
+					uid = v_uid ? YAJL_GET_INTEGER(v_uid) : -1;
+					i = array_len;
+				}
+			}
+		} /* End if (uid !=0) */
+
+		pr_pdebug("UID: %d", uid);
+
 		if (prestart(rootfs, id, target_pid, mount_label, config_mounts, config_mounts_len, uid, gid) != 0) {
 			return EXIT_FAILURE;
 		}
-	} else if ((argc > 2 && !strcmp("poststop", argv[1])) || (target_pid == 0)) {
+	/* If caller did not specify argv[1], and target_pid == 0, we default
+	   to postop.
+	*/
+	} else if ((argc >= 2 && !strcmp("poststop", argv[1])) ||
+		   (argc == 1 && target_pid == 0)) {
 		if (poststop(rootfs, config_mounts, config_mounts_len) != 0) {
 			return EXIT_FAILURE;
 		}
 	} else {
-		pr_perror("command not recognized: %s", argv[1]);
-		return EXIT_FAILURE;
+		if (argc >= 2) {
+			pr_pdebug("%s ignored", argv[1]);
+		} else {
+			pr_pdebug("No args ignoring");
+		}
 	}
 
 	return EXIT_SUCCESS;
