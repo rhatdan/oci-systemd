@@ -48,7 +48,32 @@ journalctl -M CONTAINER_UUID
 
 To build, install, clean-up:
 
-First, **clone** this branch, then:
+Prior to installing oci-systemd-hook, install the following packages on your linux distro:
+
+* autoconf
+* automake
+* gcc
+* git 
+* go-md2man
+* libmount-devel
+* libselinux-devel
+* yajl-devel 
+
+In Fedora, you can use this command:
+
+```
+ dnf -y install \
+    autoconf \
+    automake \
+    gcc \
+    git \
+    go-md2man \
+    libmount-devel \
+    libselinux-devel \
+    yajl-devel
+```
+
+Then **clone** this branch and follow these steps:
 
 ```
 git clone https://github.com/projectatomic/oci-systemd-hook
