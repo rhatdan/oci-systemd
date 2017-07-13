@@ -910,6 +910,18 @@ int main(int argc, char *argv[])
 	}
 	char *rootfs = YAJL_GET_STRING(v_root);
 
+	/* Prepend bundle path if the rootfs string is relative */
+	if (rootfs[0] != '/') {
+		char *new_rootfs;
+
+		asprintf(&new_rootfs, "%s/%s", YAJL_GET_STRING(v_bundle_path), rootfs);
+		if (!new_rootfs) {
+			pr_perror("failed to alloc rootfs");
+			return EXIT_FAILURE;
+		}
+		rootfs = new_rootfs;
+	}
+
 	pr_pdebug("rootfs=%s", rootfs);
 	const char **config_mounts = NULL;
 	unsigned config_mounts_len = 0;
