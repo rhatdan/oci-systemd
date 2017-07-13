@@ -1,5 +1,6 @@
 # OCI systemd hooks
 ==============
+
 OCI systemd hook enables users to run systemd in docker and [OCI](https://github.com/opencontainers/specs) compatible runtimes such as runc without requiring `--privileged` flag.
 
 This project produces a C binary that can be used with runc and Docker (with minor code changes).
@@ -22,7 +23,10 @@ systemd is expected to be able to run within the container without requiring
 the `--privileged` option.  However you will still need to specify a special `--stop-signal`.  Standard docker containers sends SIGTERM to pid 1, but systemd
 does not shut down properly when it recieves a SIGTERM.  systemd specified that it needs to receive a RTMIN+3 signal to shutdown properly.
 
-If you created a container image based on a dockerfile like the following:
+
+**Usage**
+
+If you created a container image based on a Dockerfile like the following:
 ```
 cat Dockerfile
 FROM fedora:latest
@@ -45,8 +49,15 @@ to show the containers journal information on the host, using journalctl.
 journalctl -M CONTAINER_UUID
 ```
 
+**Disabling oci-systemd-hook**
 
-To build, install, clean-up:
+To disable oci-systemd-hook for a particular run, which is primarily useful in an Atomic Host environment, the environment variable 'oci-systemd-hook' can be set to 'disabled'.  This prevents oci-systemd-hook from being run for that invocation.  A sample usage is:
+
+```
+docker run --env oci-systemd-hook=disabled -it --rm  fedora /bin/bash
+```
+
+**To build and install**
 
 Prior to installing oci-systemd-hook, install the following packages on your linux distro:
 
