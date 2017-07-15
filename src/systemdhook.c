@@ -439,6 +439,11 @@ static int prestart(const char *rootfs,
 		return rc;
 	}
 
+	rc = move_mounts(rootfs, "/run/lock", config_mounts, config_mounts_len, uid, gid, options);
+	if (rc < 0) {
+		return rc;
+	}
+
 	_cleanup_free_ char *memory_cgroup_path = NULL;
 	memory_cgroup_path = get_process_cgroup_subsystem_path(pid, "memory");
 	if (!memory_cgroup_path) {
