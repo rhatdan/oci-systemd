@@ -97,9 +97,18 @@ static int makepath(char *dir, mode_t mode)
     if (strlen(dir) == 1 && dir[0] == '/')
 	return 0;
 
-    makepath(dirname(strdupa(dir)), mode);
+    if (makepath(dirname(strdupa(dir)), mode) < 0 && errno != EEXIST)
+      return -1;
 
     return mkdir(dir, mode);
+}
+
+static int makefilepath(char *file, mode_t mode)
+{
+    if (makepath(dirname(strdupa(file)), mode) < 0 && errno != EEXIST)
+      return -1;
+
+    return creat(file, mode);
 }
 
 static int bind_mount(const char *src, const char *dest, int readonly) {
@@ -280,21 +289,21 @@ static bool contains_mount(const char **config_mounts, unsigned len, const char 
 /*
  * Move specified mount to temporary directory
  */
-static int move_mount_to_tmp(const char *rootfs, const char *tmp_dir, const char *mount_dir, int offset)
+static int move_mount_to_tmp(const char *rootfs, const char *tmp_dir, const char *mount_pnt, int offset)
 {
 	int rc;
 	_cleanup_free_ char *src = NULL;
 	_cleanup_free_ char *dest = NULL;
 	_cleanup_free_ char *post = NULL;
 
-	rc = asprintf(&src, "%s/%s", rootfs, mount_dir);
+	rc = asprintf(&src, "%s/%s", rootfs, mount_pnt);
 	if (rc < 0) {
 		pr_perror("Failed to allocate memory for src");
 		return -1;
 	}
 
 	/* Find the second '/' to get the postfix */
-	post = strdup(&mount_dir[offset]);
+	post = strdup(&mount_pnt[offset]);
 
 	if (!post) {
 		pr_perror("Failed to allocate memory for postfix");
@@ -307,10 +316,26 @@ static int move_mount_to_tmp(const char *rootfs, const char *tmp_dir, const char
 		return -1;
 	}
 
-	if (makepath(dest, 0755) == -1) {
-		if (errno != EEXIST) {
-			pr_perror("Failed to mkdir new dest: %s", dest);
-			return -1;
+	struct stat stat_buf;
+
+	if (stat(src, &stat_buf) == -1) {
+		pr_perror("Failed to stat: %s", src);
+		return -1;
+	}
+
+	if (S_ISDIR(stat_buf.st_mode)) {
+		if (makepath(dest, 0755) == -1) {
+			if (errno != EEXIST) {
+				pr_perror("Failed to mkdir new dest: %s", dest);
+				return -1;
+			}
+		}
+	} else {
+		if (makefilepath(dest, 0755) == -1) {
+			if (errno != EEXIST) {
+				pr_perror("Failed to create new dest: %s", dest);
+				return -1;
+			}
 		}
 	}
 
