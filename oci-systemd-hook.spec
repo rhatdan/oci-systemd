@@ -9,7 +9,7 @@
 %global shortcommit     %(c=%{commit}; echo ${c:0:7})
 
 Name:           oci-systemd-hook
-Version:        0.1.4
+Version:        0.1.5
 Release:        1.git%{shortcommit}%{?dist}
 Summary:        OCI systemd hook for docker
 Group:          Applications/Text
@@ -47,8 +47,14 @@ make %{?_smp_mflags}
 %license LICENSE
 %dir /%{_libexecdir}/oci
 %dir /%{_libexecdir}/oci/hooks.d
+%dir %{_usr}/share/containers/oci/hooks.d
+%{_usr}/share/containers/oci/hooks.d/oci-register-machine.json
 
 %changelog
+* Wed Sep 13 2017 Dan Walsh <dwalsh@redhat.com> - 0.1.5-1.gitde345df
+- Add support for json configuration to identify when to use hook
+- Needed for crio package
+
 * Thu Feb 18 2016 Dan Walsh <dwalsh@redhat.com> - 0.1.4-1.gitde345df
 - Fix up to prepare for review
 
