@@ -944,8 +944,7 @@ int main(int argc, char *argv[])
 	if (rootfs[0] != '/') {
 		char *new_rootfs;
 
-		asprintf(&new_rootfs, "%s/%s", YAJL_GET_STRING(v_bundle_path), rootfs);
-		if (!new_rootfs) {
+		if (asprintf(&new_rootfs, "%s/%s", YAJL_GET_STRING(v_bundle_path), rootfs) < 0) {
 			pr_perror("failed to alloc rootfs");
 			return EXIT_FAILURE;
 		}
