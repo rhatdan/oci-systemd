@@ -283,7 +283,7 @@ static int mount_cgroup(const char *id, const char *rootfs, const char *options,
 static bool contains_mount(const char *id, const char **config_mounts, unsigned len, const char *mount) {
 	for (unsigned i = 0; i < len; i++) {
 		if (!strcmp(mount, config_mounts[i])) {
-			pr_pdebug("%s: %s already present as a mount point in container configuration, skipping\n", id, mount);
+			pr_pdebug("%s: %s already present as a mount point in container configuration, skipping", id, mount);
 			return true;
 		}
 	}
@@ -493,7 +493,7 @@ static int prestart(const char *rootfs,
 		return -1;
 	}
 
-	pr_pdebug("%s: LIMIT: %s\n", id, memory_limit_str);
+	pr_pdebug("%s: LIMIT: %s", id, memory_limit_str);
 
 	char memory_str[PATH_MAX];
 	uint64_t total_memory = 0;
@@ -502,7 +502,7 @@ static int prestart(const char *rootfs,
 
 	memory_limit_in_bytes = strtoull(memory_limit_str, &ptr, 10);
 
-	pr_pdebug("%s: Limit in bytes: ""%" PRIu64 "\n", id, memory_limit_in_bytes);
+	pr_pdebug("%s: Limit in bytes: ""%" PRIu64 "", id, memory_limit_in_bytes);
 
 	total_memory = get_mem_total();
 	if (memory_limit_in_bytes < total_memory) {
@@ -932,12 +932,12 @@ int main(int argc, char *argv[])
 	cmd = YAJL_GET_STRING(v_arg0_value);
 	/* Don't do anything if init is actually container runtime bind mounted /dev/init */
 	if (!strcmp(cmd, "/dev/init")) {
-		pr_pdebug("%s: Skipping as container command is /dev/init, not systemd init\n", id);
+		pr_pdebug("%s: Skipping as container command is /dev/init, not systemd init", id);
 		return EXIT_SUCCESS;
 	}
 	char *cmd_file_name = basename(cmd);
 	if (strcmp("init", cmd_file_name) && strcmp("systemd", cmd_file_name)) {
-		pr_pdebug("%s: Skipping as container command is %s, not init or systemd\n", id, cmd);
+		pr_pdebug("%s: Skipping as container command is %s, not init or systemd", id, cmd);
 		return EXIT_SUCCESS;
 	}
 #endif
