@@ -87,6 +87,10 @@ DEFINE_CLEANUP_FUNC(yajl_val, yajl_tree_free)
 #define CGROUP_ROOT "/sys/fs/cgroup"
 #define CGROUP_SYSTEMD CGROUP_ROOT"/systemd"
 
+char *shortid(const char *id) {
+	return strndup(id, 12);
+}
+
 static int makepath(char *dir, mode_t mode)
 {
     if (!dir) {
@@ -111,22 +115,22 @@ static int makefilepath(char *file, mode_t mode)
     return creat(file, mode);
 }
 
-static int bind_mount(const char *src, const char *dest, int readonly) {
+static int bind_mount(const char *id, const char *src, const char *dest, int readonly) {
 	if (mount(src, dest, "bind", MS_BIND, NULL) == -1) {
-		pr_perror("Failed to mount %s on %s", src, dest);
+		pr_perror("%s: Failed to mount %s on %s", id, src, dest);
 		return -1;
 	}
 	//  Remount bind mount to read/only if requested by the caller
 	if (readonly) {
 		if (mount(src, dest, "bind", MS_REMOUNT|MS_BIND|MS_RDONLY, "") == -1) {
-			pr_perror("Failed to remount %s readonly", dest);
+			pr_perror("%s: Failed to remount %s readonly", id, dest);
 			return -1;
 		}
 	}
 	return 0;
 }
 
-static int chperm(const char *path, const char *label, int uid, int gid, bool doChown) {
+static int chperm(const char *id, const char *path, const char *label, int uid, int gid, bool doChown) {
 	DIR *dir;
 	struct dirent *ent;
 	if ((dir = opendir (path)) != NULL) {
@@ -134,25 +138,25 @@ static int chperm(const char *path, const char *label, int uid, int gid, bool do
 		while ((ent = readdir (dir)) != NULL) {
 			_cleanup_free_ char *full_path = NULL;
 			if (asprintf(&full_path, "%s/%s", path, ent->d_name) < 0) {
-				pr_perror("Failed to create path for chperm");
+				pr_perror("%s: Failed to create path for chperm", id);
 				closedir(dir);
 				return -1;
 			}
 			if (setfilecon (full_path, label) < 0) {
-				pr_perror("Failed to set context %s on %s", label, full_path);
+				pr_perror("%s: Failed to set context %s on %s", id, label, full_path);
 			}
 
 			if (doChown) {
 				/* Change uid and gid to something the container can handle */
 				if (chown(full_path, uid, gid) < 0 ) {
-					pr_perror("Failed to chown %d:%d to full_path owner: %s", uid, gid, full_path);
+					pr_perror("%s: Failed to chown %d:%d to full_path owner: %s", id, uid, gid, full_path);
 				}
 			}
 		}
 		closedir (dir);
 	} else {
 		/* could not open directory */
-		pr_perror("Failed to set labels on %s", path);
+		pr_perror("%s: Failed to set labels on %s", id, path);
 		return -1;
 	}
 	return 0;
@@ -161,10 +165,10 @@ static int chperm(const char *path, const char *label, int uid, int gid, bool do
 /*
  * Get the contents of the file specified by its path
  */
-static char *get_file_contents(const char *path) {
+static char *get_file_contents(const char *id, const char *path) {
 	_cleanup_close_ int fd = -1;
 	if ((fd = open(path, O_RDONLY)) == -1) {
-		pr_perror("Failed to open file for reading");
+		pr_perror("%s: Failed to open file for reading", id);
 		return NULL;
 	}
 
@@ -172,7 +176,7 @@ static char *get_file_contents(const char *path) {
 	ssize_t rd;
 	rd = read(fd, buffer, 256);
 	if (rd == -1) {
-		pr_perror("Failed to read file contents");
+		pr_perror("%s: Failed to read file contents", id);
 		return NULL;
 	}
 
@@ -184,19 +188,19 @@ static char *get_file_contents(const char *path) {
 /*
  * Get the cgroup file system path for the specified process id
  */
-static char *get_process_cgroup_subsystem_path(int pid, const char *subsystem) {
+static char *get_process_cgroup_subsystem_path(const char *id, int pid, const char *subsystem) {
 	_cleanup_free_ char *cgroups_file_path = NULL;
 	int rc;
 	rc = asprintf(&cgroups_file_path, "/proc/%d/cgroup", pid);
 	if (rc < 0) {
-		pr_perror("Failed to allocate memory for cgroups file path");
+		pr_perror("%s: Failed to allocate memory for cgroups file path", id);
 		return NULL;
 	}
 
 	_cleanup_fclose_ FILE *fp = NULL;
 	fp = fopen(cgroups_file_path, "r");
 	if (fp == NULL) {
-		pr_perror("Failed to open cgroups file");
+		pr_perror("%s: Failed to open cgroups file", id);
 		return NULL;
 	}
 
@@ -206,22 +210,22 @@ static char *get_process_cgroup_subsystem_path(int pid, const char *subsystem) {
 	char *ptr;
 	char *subsystem_path = NULL;
 	while ((read = getline(&line, &len, fp)) != -1) {
-		pr_pdebug("%s", line);
+		pr_pdebug("%s: %s", line, id);
 		ptr = strchr(line, ':');
 		if (ptr == NULL) {
-			pr_perror("Error parsing cgroup, ':' not found: %s", line);
+			pr_perror("%s: Error parsing cgroup, ':' not found: %s", id, line);
 			return NULL;
 		}
-		pr_pdebug("%s", ptr);
+		pr_pdebug("%s: %s", id, ptr);
 		ptr++;
 		if (!strncmp(ptr, subsystem, strlen(subsystem))) {
-			pr_pdebug("Found cgroup");
+			pr_pdebug("%s: Found cgroup", id);
 			char *path = strchr(ptr, '/');
 			if (path == NULL) {
-				pr_perror("Error finding path in cgroup: %s", line);
+				pr_perror("%s: Error finding path in cgroup: %s", id, line);
 				return NULL;
 			}
-			pr_pdebug("PATH: %s", path);
+			pr_pdebug("%s: PATH: %s", id, path);
 			const char *subpath = strchr(subsystem, '=');
 			if (subpath == NULL) {
 				subpath = subsystem;
@@ -231,10 +235,10 @@ static char *get_process_cgroup_subsystem_path(int pid, const char *subsystem) {
 
 			rc = asprintf(&subsystem_path, "%s/%s%s", CGROUP_ROOT, subpath, path);
 			if (rc < 0) {
-				pr_perror("Failed to allocate memory for subsystemd path");
+				pr_perror("%s: Failed to allocate memory for subsystemd path", id);
 				return NULL;
 			}
-			pr_pdebug("SUBSYSTEM_PATH: %s", subsystem_path);
+			pr_pdebug("%s: SUBSYSTEM_PATH: %s", id, subsystem_path);
 			subsystem_path[strlen(subsystem_path) - 1] = '\0';
 			return subsystem_path;
 		}
@@ -248,38 +252,38 @@ static char *get_process_cgroup_subsystem_path(int pid, const char *subsystem) {
    Create a systemd subdir
    Remount the tmpfs read/only
  */
-static int mount_cgroup(const char *rootfs, const char *options, char *systemd_path)
+static int mount_cgroup(const char *id, const char *rootfs, const char *options, char *systemd_path)
 {
 	_cleanup_free_ char *cgroup_path = NULL;
 
 	if (asprintf(&cgroup_path, "%s/%s", rootfs, CGROUP_ROOT) < 0) {
-		pr_perror("Failed to create path for %s", CGROUP_ROOT);
+		pr_perror("%s: Failed to create path for %s", id, CGROUP_ROOT);
 		return -1;
 	}
 	if ((makepath(cgroup_path, 0755) == -1) && (errno != EEXIST)) {
-		pr_perror("Failed to mkdir new dest: %s", cgroup_path);
+		pr_perror("%s: Failed to mkdir new dest: %s", id, cgroup_path);
 		return -1;
 	}
 	/* Mount tmpfs at new cgroup directory */
 	if (mount("tmpfs", cgroup_path, "tmpfs", MS_NODEV|MS_NOSUID, options) == -1) {
-		pr_perror("Failed to mount tmpfs at %s", cgroup_path);
+		pr_perror("%s: Failed to mount tmpfs at %s", id, cgroup_path);
 		return -1;
 	}
 	if ((makepath(systemd_path, 0755) == -1) && (errno != EEXIST)) {
-		pr_perror("Failed to mkdir new dest: %s", systemd_path);
+		pr_perror("%s: Failed to mkdir new dest: %s", id, systemd_path);
 		return -1;
 	}
 	if (mount(cgroup_path, cgroup_path, "bind", MS_REMOUNT|MS_BIND|MS_RDONLY, "") == -1) {
-		pr_perror("Failed to remount %s readonly", cgroup_path);
+		pr_perror("%s: Failed to remount %s readonly", id, cgroup_path);
 		return -1;
 	}
 	return 0;
 }
 
-static bool contains_mount(const char **config_mounts, unsigned len, const char *mount) {
+static bool contains_mount(const char *id, const char **config_mounts, unsigned len, const char *mount) {
 	for (unsigned i = 0; i < len; i++) {
 		if (!strcmp(mount, config_mounts[i])) {
-			pr_pdebug("%s already present as a mount point in container configuration, skipping\n", mount);
+			pr_pdebug("%s: %s already present as a mount point in container configuration, skipping", id, mount);
 			return true;
 		}
 	}
@@ -289,7 +293,7 @@ static bool contains_mount(const char **config_mounts, unsigned len, const char 
 /*
  * Move specified mount to temporary directory
  */
-static int move_mount_to_tmp(const char *rootfs, const char *tmp_dir, const char *mount_pnt, int offset)
+static int move_mount_to_tmp(const char *id, const char *rootfs, const char *tmp_dir, const char *mount_pnt, int offset)
 {
 	int rc;
 	_cleanup_free_ char *src = NULL;
@@ -298,7 +302,7 @@ static int move_mount_to_tmp(const char *rootfs, const char *tmp_dir, const char
 
 	rc = asprintf(&src, "%s/%s", rootfs, mount_pnt);
 	if (rc < 0) {
-		pr_perror("Failed to allocate memory for src");
+		pr_perror("%s: Failed to allocate memory for src", id);
 		return -1;
 	}
 
@@ -306,34 +310,34 @@ static int move_mount_to_tmp(const char *rootfs, const char *tmp_dir, const char
 	post = strdup(&mount_pnt[offset]);
 
 	if (!post) {
-		pr_perror("Failed to allocate memory for postfix");
+		pr_perror("%s: Failed to allocate memory for postfix", id);
 		return -1;
 	}
 
 	rc = asprintf(&dest, "%s/%s", tmp_dir, post);
 	if (rc < 0) {
-		pr_perror("Failed to allocate memory for dest");
+		pr_perror("%s: Failed to allocate memory for dest", id);
 		return -1;
 	}
 
 	struct stat stat_buf;
 
 	if (stat(src, &stat_buf) == -1) {
-		pr_perror("Failed to stat: %s", src);
+		pr_perror("%s: Failed to stat: %s", id, src);
 		return -1;
 	}
 
 	if (S_ISDIR(stat_buf.st_mode)) {
 		if (makepath(dest, 0755) == -1) {
 			if (errno != EEXIST) {
-				pr_perror("Failed to mkdir new dest: %s", dest);
+				pr_perror("%s: Failed to mkdir new dest: %s", id, dest);
 				return -1;
 			}
 		}
 	} else {
 		if (makefilepath(dest, 0755) == -1) {
 			if (errno != EEXIST) {
-				pr_perror("Failed to create new dest: %s", dest);
+				pr_perror("%s: Failed to create new dest: %s", id, dest);
 				return -1;
 			}
 		}
@@ -341,14 +345,15 @@ static int move_mount_to_tmp(const char *rootfs, const char *tmp_dir, const char
 
 	/* Move the mount to temporary directory */
 	if ((mount(src, dest, "", MS_MOVE, "") == -1)) {
-		pr_perror("Failed to move mount %s to %s", src, dest);
+		pr_perror("%s: Failed to move mount %s to %s", id, src, dest);
 		return -1;
 	}
 
 	return 0;
 }
 
-static int move_mounts(const char *rootfs,
+static int move_mounts(const char *id,
+		       const char *rootfs,
 		       const char *path,
 		       const char **config_mounts,
 		       unsigned config_mounts_len,
@@ -365,22 +370,22 @@ static int move_mounts(const char *rootfs,
 
 	char *tmp_dir = mkdtemp(temp_template);
 	if (tmp_dir == NULL) {
-		pr_perror("Failed to create temporary directory for mounts");
+		pr_perror("%s: Failed to create temporary directory for mounts", id);
 		return -1;
 	}
 
 	/* Create the PATH directory */
-	if (!contains_mount(config_mounts, config_mounts_len, path)) {
+	if (!contains_mount(id, config_mounts, config_mounts_len, path)) {
 		if (mkdir(mount_dir, 0755) == -1) {
 			if (errno != EEXIST) {
-				pr_perror("Failed to mkdir: %s", mount_dir);
+				pr_perror("%s: Failed to mkdir: %s", id, mount_dir);
 				return -1;
 			}
 		}
 
 		/* Mount tmpfs at new temp directory */
 		if (mount("tmpfs", tmp_dir, "tmpfs", MS_NODEV|MS_NOSUID, options) == -1) {
-			pr_perror("Failed to mount tmpfs at %s", tmp_dir);
+			pr_perror("%s: Failed to mount tmpfs at %s", id, tmp_dir);
 			return -1;
 		}
 
@@ -388,8 +393,8 @@ static int move_mounts(const char *rootfs,
 		for (unsigned i = 0; i < config_mounts_len; i++) {
 			/* Match destinations that begin with PATH */
 			if (!strncmp(path, config_mounts[i], strlen(path))) {
-				if (move_mount_to_tmp(rootfs, tmp_dir, config_mounts[i], strlen(path)) < 0) {
-					pr_perror("Failed to move %s to %s", config_mounts[i], tmp_dir);
+				if (move_mount_to_tmp(id, rootfs, tmp_dir, config_mounts[i], strlen(path)) < 0) {
+					pr_perror("%s: Failed to move %s to %s", id, config_mounts[i], tmp_dir);
 					return -1;
 				}
 			}
@@ -397,17 +402,17 @@ static int move_mounts(const char *rootfs,
 
 		/* Move temporary directory to PATH */
 		if ((mount(tmp_dir, mount_dir, "", MS_MOVE, "") == -1)) {
-			pr_perror("Failed to move mount %s to %s", tmp_dir, mount_dir);
+			pr_perror("%s: Failed to move mount %s to %s", id, tmp_dir, mount_dir);
 			return -1;
 		}
 		if (chown(mount_dir, uid, gid) < 0 ) {
-			pr_perror("Failed to chown %d:%d to mount_dir owner: %s", uid, gid, mount_dir);
+			pr_perror("%s: Failed to chown %d:%d to mount_dir owner: %s", id, uid, gid, mount_dir);
 		}
 	}
 
 	/* Remove the temp directory for PATH */
 	if (rmdir(tmp_dir) < 0) {
-		pr_perror("Failed to remove %s", tmp_dir);
+		pr_perror("%s: Failed to remove %s", id, tmp_dir);
 		return -1;
 	}
 	return 0;
@@ -431,13 +436,13 @@ static int prestart(const char *rootfs,
 
 	fd = open(process_mnt_ns_fd, O_RDONLY);
 	if (fd < 0) {
-		pr_perror("Failed to open mnt namespace fd %s", process_mnt_ns_fd);
+		pr_perror("%s: Failed to open mnt namespace fd %s", id, process_mnt_ns_fd);
 		return -1;
 	}
 
 	/* Join the mount namespace of the target process */
 	if (setns(fd, 0) == -1) {
-		pr_perror("Failed to setns to %s", process_mnt_ns_fd);
+		pr_perror("%s: Failed to setns to %s", id, process_mnt_ns_fd);
 		return -1;
 	}
 	close(fd);
@@ -445,7 +450,7 @@ static int prestart(const char *rootfs,
 
 	/* Switch to the root directory */
 	if (chdir("/") == -1) {
-		pr_perror("Failed to chdir");
+		pr_perror("%s: Failed to chdir", id);
 		return -1;
 	}
 
@@ -455,40 +460,40 @@ static int prestart(const char *rootfs,
 		rc = asprintf(&options, "mode=755,size=65536k,context=\"%s\"", mount_label);
 	}
 	if (rc < 0) {
-		pr_perror("Failed to allocate memory for context");
+		pr_perror("%s: Failed to allocate memory for context", id);
 		return -1;
 	}
 
-	rc = move_mounts(rootfs, "/run", config_mounts, config_mounts_len, uid, gid, options);
+	rc = move_mounts(id, rootfs, "/run", config_mounts, config_mounts_len, uid, gid, options);
 	if (rc < 0) {
 		return rc;
 	}
 
-	rc = move_mounts(rootfs, "/run/lock", config_mounts, config_mounts_len, uid, gid, options);
+	rc = move_mounts(id, rootfs, "/run/lock", config_mounts, config_mounts_len, uid, gid, options);
 	if (rc < 0) {
 		return rc;
 	}
 
 	_cleanup_free_ char *memory_cgroup_path = NULL;
-	memory_cgroup_path = get_process_cgroup_subsystem_path(pid, "memory");
+	memory_cgroup_path = get_process_cgroup_subsystem_path(id, pid, "memory");
 	if (!memory_cgroup_path) {
-		pr_perror("Failed to get memory subsystem path for the process");
+		pr_perror("%s: Failed to get memory subsystem path for the process", id);
 		return -1;
 	}
 
 	char memory_limit_path[PATH_MAX];
 	snprintf(memory_limit_path, PATH_MAX, "%s/memory.limit_in_bytes", memory_cgroup_path);
 
-	pr_pdebug("memory path: %s", memory_limit_path);
+	pr_pdebug("%s: memory path: %s", id, memory_limit_path);
 
 	_cleanup_free_ char *memory_limit_str = NULL;
-	memory_limit_str = get_file_contents(memory_limit_path);
+	memory_limit_str = get_file_contents(id, memory_limit_path);
 	if (!memory_limit_str) {
-		pr_perror("Failed to get memory limit from cgroups");
+		pr_perror("%s: Failed to get memory limit from cgroups", id);
 		return -1;
 	}
 
-	pr_pdebug("LIMIT: %s\n", memory_limit_str);
+	pr_pdebug("%s: LIMIT: %s", id, memory_limit_str);
 
 	char memory_str[PATH_MAX];
 	uint64_t total_memory = 0;
@@ -497,7 +502,7 @@ static int prestart(const char *rootfs,
 
 	memory_limit_in_bytes = strtoull(memory_limit_str, &ptr, 10);
 
-	pr_pdebug("Limit in bytes: ""%" PRIu64 "\n", memory_limit_in_bytes);
+	pr_pdebug("%s: Limit in bytes: ""%" PRIu64 "", id, memory_limit_in_bytes);
 
 	total_memory = get_mem_total();
 	if (memory_limit_in_bytes < total_memory) {
@@ -515,14 +520,14 @@ static int prestart(const char *rootfs,
 	   Create a /var/log/journal directory on the host and mount it into
 	   the container.
 	*/
-	if (!contains_mount(config_mounts, config_mounts_len, "/var/log/journal")) {
+	if (!contains_mount(id, config_mounts, config_mounts_len, "/var/log/journal")) {
 		char journal_dir[PATH_MAX];
 		snprintf(journal_dir, PATH_MAX, "/var/log/journal/%.32s", id);
 		char cont_journal_dir[PATH_MAX];
 		snprintf(cont_journal_dir, PATH_MAX, "%s/var/log/journal", rootfs);
 		if (makepath(journal_dir, 0755) == -1) {
 			if (errno != EEXIST) {
-				pr_perror("Failed to mkdir journal dir: %s", journal_dir);
+				pr_perror("%s: Failed to mkdir journal dir: %s", id, journal_dir);
 				return -1;
 			}
 		}
@@ -530,7 +535,7 @@ static int prestart(const char *rootfs,
 		if (strcmp("", mount_label)) {
 			rc = setfilecon(journal_dir, (security_context_t)mount_label);
 			if (rc < 0) {
-				pr_perror("Failed to set journal dir selinux context");
+				pr_perror("%s: Failed to set journal dir selinux context", id);
 				return -1;
 			}
 		}
@@ -544,7 +549,7 @@ static int prestart(const char *rootfs,
 		    (errno == EEXIST)) {
 			snprintf(cont_journal_dir, PATH_MAX, "%s%s", rootfs, journal_dir);
 			/* Mount tmpfs at /var/log/journal for systemd */
-			rc = move_mounts(rootfs, "/var/log/journal", config_mounts, config_mounts_len, uid, gid, options);
+			rc = move_mounts(id, rootfs, "/var/log/journal", config_mounts, config_mounts_len, uid, gid, options);
 			if (rc < 0) {
 				return rc;
 			}
@@ -558,26 +563,26 @@ static int prestart(const char *rootfs,
 
 		if ((makepath(cont_journal_dir, 0755) == -1) &&
 		    (errno != EEXIST)) {
-			pr_perror("Failed to mkdir container journal dir: %s", cont_journal_dir);
+			pr_perror("%s: Failed to mkdir container journal dir: %s", id, cont_journal_dir);
 			return -1;
 		}
 
 		/* Mount journal directory at cont_journal_dir path in the container */
-		if (bind_mount(journal_dir, cont_journal_dir, false) == -1) {
+		if (bind_mount(id, journal_dir, cont_journal_dir, false) == -1) {
 			return -1;
 		}
 
 		/* Change perms, uid and gid to something the container can handle */
-		if (chperm(cont_journal_dir, mount_label, uid, gid, true) < 0) {
+		if (chperm(id, cont_journal_dir, mount_label, uid, gid, true) < 0) {
 			return -1;
 		}
 	}
 
 	/* Create the /tmp directory */
-	if (!contains_mount(config_mounts, config_mounts_len, "/tmp")) {
+	if (!contains_mount(id, config_mounts, config_mounts_len, "/tmp")) {
 		if (mkdir(tmp_dir, 0755) == -1) {
 			if (errno != EEXIST) {
-				pr_perror("Failed to mkdir: %s", tmp_dir);
+				pr_perror("%s: Failed to mkdir: %s", id, tmp_dir);
 				return -1;
 			}
 		}
@@ -589,12 +594,12 @@ static int prestart(const char *rootfs,
 			rc = asprintf(&options, "mode=1777%s,context=\"%s\"", memory_str, mount_label);
 		}
 		if (rc < 0) {
-			pr_perror("Failed to allocate memory for context");
+			pr_perror("%s: Failed to allocate memory for context", id);
 			return -1;
 		}
 
 		/* Mount tmpfs at /tmp for systemd */
-		rc = move_mounts(rootfs, "/tmp", config_mounts, config_mounts_len, uid, gid, options);
+		rc = move_mounts(id, rootfs, "/tmp", config_mounts, config_mounts_len, uid, gid, options);
 		if (rc < 0) {
 			return rc;
 		}
@@ -611,20 +616,20 @@ static int prestart(const char *rootfs,
 
 	_cleanup_free_ char *systemd_path = NULL;
 	if (asprintf(&systemd_path, "%s/%s", rootfs, CGROUP_SYSTEMD) < 0) {
-		pr_perror("Failed to create path for %s", CGROUP_ROOT);
+		pr_perror("%s: Failed to create path for %s", id, CGROUP_ROOT);
 		return -1;
 	}
-	if (!contains_mount(config_mounts, config_mounts_len, CGROUP_ROOT)) {
-		rc = mount_cgroup(rootfs, options, systemd_path);
+	if (!contains_mount(id, config_mounts, config_mounts_len, CGROUP_ROOT)) {
+		rc = mount_cgroup(id, rootfs, options, systemd_path);
 	} else {
 		if ((makepath(systemd_path, 0755) == -1) && (errno != EEXIST)) {
-			pr_perror("Failed to mkdir new dest: %s", systemd_path);
+			pr_perror("%s: Failed to mkdir new dest: %s", id, systemd_path);
 			return -1;
 		}
 	}
 
-	if (bind_mount(CGROUP_SYSTEMD, systemd_path, true)) {
-		pr_perror("Failed to bind mount %s on %s", CGROUP_SYSTEMD, systemd_path);
+	if (bind_mount(id, CGROUP_SYSTEMD, systemd_path, true)) {
+		pr_perror("%s: Failed to bind mount %s on %s", id, CGROUP_SYSTEMD, systemd_path);
 		return -1;
 	}
 
@@ -632,14 +637,14 @@ static int prestart(const char *rootfs,
 	   Mount the writable systemd hierarchy into the container
 	*/
 	_cleanup_free_ char *named_path = NULL;
-	named_path = get_process_cgroup_subsystem_path(pid, "name=systemd");
+	named_path = get_process_cgroup_subsystem_path(id, pid, "name=systemd");
 	_cleanup_free_ char *systemd_named_path = NULL;
 	if (asprintf(&systemd_named_path, "%s/%s", rootfs, named_path) < 0) {
-		pr_perror("Failed to create path for %s/%s", rootfs, systemd_named_path);
+		pr_perror("%s: Failed to create path for %s/%s", id, rootfs, systemd_named_path);
 		return -1;
 	}
-	if (bind_mount(named_path, systemd_named_path, false)) {
-		pr_perror("Failed to bind mount %s on %s", CGROUP_SYSTEMD, systemd_named_path);
+	if (bind_mount(id, named_path, systemd_named_path, false)) {
+		pr_perror("%s: Failed to bind mount %s on %s", id, CGROUP_SYSTEMD, systemd_named_path);
 		return -1;
 	}
 
@@ -648,7 +653,7 @@ static int prestart(const char *rootfs,
 	* container so let's pass false to not have it done in the chperm
 	* function.
 	***/
-	if (chperm(systemd_named_path, mount_label, uid, gid, false) < 0) {
+	if (chperm(id, systemd_named_path, mount_label, uid, gid, false) < 0) {
 		return -1;
 	}
 
@@ -656,25 +661,25 @@ static int prestart(const char *rootfs,
 	* chown files in the /sys/fs/cgroup directory paths to the
 	* container's uid and gid, so let's pass true here.
 	***/
-	if (chperm(named_path, mount_label, uid, gid, true) < 0) {
+	if (chperm(id, named_path, mount_label, uid, gid, true) < 0) {
 		return -1;
 	}
 
 	/*
 	   Create /etc/machine-id if it does not exist
 	*/
-	if (!contains_mount(config_mounts, config_mounts_len, "/etc/machine-id")) {
+	if (!contains_mount(id, config_mounts, config_mounts_len, "/etc/machine-id")) {
 		char mid_path[PATH_MAX];
 		snprintf(mid_path, PATH_MAX, "%s/etc/machine-id", rootfs);
 		fd = open(mid_path, O_CREAT|O_WRONLY, 0444);
 		if (fd < 0) {
-			pr_perror("Failed to open %s for writing", mid_path);
+			pr_perror("%s: Failed to open %s for writing", id, mid_path);
 			return -1;
 		}
 
 		rc = dprintf(fd, "%.32s\n", id);
 		if (rc < 0) {
-			pr_perror("Failed to write id to %s", mid_path);
+			pr_perror("%s: Failed to write id to %s", id, mid_path);
 			return -1;
 		}
 	}
@@ -682,11 +687,13 @@ static int prestart(const char *rootfs,
 	return 0;
 }
 
-static int poststop(const char *rootfs,
-		const char **config_mounts,
-		unsigned config_mounts_len)
+static int poststop(
+	const char *id,
+	const char *rootfs,
+	const char **config_mounts,
+	unsigned config_mounts_len)
 {
-	if (contains_mount(config_mounts, config_mounts_len, "/etc/machine-id")) {
+	if (contains_mount(id, config_mounts, config_mounts_len, "/etc/machine-id")) {
 		return 0;
 	}
 
@@ -695,7 +702,7 @@ static int poststop(const char *rootfs,
 	snprintf(mid_path, PATH_MAX, "%s/etc/machine-id", rootfs);
 
 	if (unlink(mid_path) != 0 && (errno != ENOENT)) {
-		pr_perror("Unable to remove %s", mid_path);
+		pr_perror("%s: Unable to remove %s", id, mid_path);
 		ret = 1;
 	}
 
@@ -811,22 +818,13 @@ int main(int argc, char *argv[])
 	memset(errbuf, 0, BUFLEN);
 	node = yajl_tree_parse((const char *)stateData, errbuf, sizeof(errbuf));
 	if (node == NULL) {
-		pr_perror("parse_error: ");
 		if (strlen(errbuf)) {
-			pr_perror(" %s", errbuf);
+			pr_perror("parse_error: %s", errbuf);
 		} else {
-			pr_perror("unknown error");
+			pr_perror("parse_error: unknown error");
 		}
 		return EXIT_FAILURE;
 	}
-
-	const char *pid_path[] = { "pid", (const char *) 0 };
-	yajl_val v_pid = yajl_tree_get(node, pid_path, yajl_t_number);
-	if (!v_pid) {
-		pr_perror("pid not found in state");
-		return EXIT_FAILURE;
-	}
-	int target_pid = YAJL_GET_INTEGER(v_pid);
 
 	const char *id_path[] = { "id", (const char *)0 };
 	yajl_val v_id = yajl_tree_get(node, id_path, yajl_t_string);
@@ -834,7 +832,21 @@ int main(int argc, char *argv[])
 		pr_perror("id not found in state");
 		return EXIT_FAILURE;
 	}
-	char *id = YAJL_GET_STRING(v_id);
+	char *container_id = YAJL_GET_STRING(v_id);
+	_cleanup_free_ char *id = NULL;
+	id = shortid(container_id);
+	if (!id) {
+		pr_perror("%s: failed to create shortid", container_id);
+		return EXIT_FAILURE;
+	}
+
+	const char *pid_path[] = { "pid", (const char *) 0 };
+	yajl_val v_pid = yajl_tree_get(node, pid_path, yajl_t_number);
+	if (!v_pid) {
+		pr_perror("%s: pid not found in state", id);
+		return EXIT_FAILURE;
+	}
+	int target_pid = YAJL_GET_INTEGER(v_pid);
 
 	/* 'bundle' must be specified for the OCI hooks, and from there we read the configuration file */
 	const char *bundle_path[] = { "bundle", (const char *)0 };
@@ -848,14 +860,14 @@ int main(int argc, char *argv[])
 		* On Docker versions prior to 1.12, bundlePath will not
 		* be provided.  Let's exit quietly if not found.
 		****/
-		pr_pinfo("Failed reading state data: bundlePath not found.  Generally this indicates Docker versions prior to 1.12 are installed.");
+		pr_pinfo("%s: Failed reading state data: bundlePath not found.  Generally this indicates Docker versions prior to 1.12 are installed.", id);
 		return EXIT_SUCCESS;
 	}
 	snprintf(config_file_name, PATH_MAX, "%s/config.json", YAJL_GET_STRING(v_bundle_path));
 	fp = fopen(config_file_name, "r");
 
 	if (fp == NULL) {
-		pr_perror("Failed to open config file: %s", config_file_name);
+		pr_perror("%s: Failed to open config file: %s", id, config_file_name);
 		return EXIT_FAILURE;
 	}
 
@@ -869,11 +881,10 @@ int main(int argc, char *argv[])
 	memset(errbuf, 0, BUFLEN);
 	config_node = yajl_tree_parse((const char *)configData, errbuf, sizeof(errbuf));
 	if (config_node == NULL) {
-		pr_perror("parse_error: ");
 		if (strlen(errbuf)) {
-			pr_perror(" %s", errbuf);
+			pr_perror("%s: parse_error: %s", id, errbuf);
 		} else {
-			pr_perror("unknown error");
+			pr_perror("%s: parse_error: unknown error", id);
 		}
 		return EXIT_FAILURE;
 	}
@@ -881,7 +892,7 @@ int main(int argc, char *argv[])
 	const char *args_path[] = {"process", "args", (const char *)0 };
 	yajl_val v_args = yajl_tree_get(config_node, args_path, yajl_t_array);
 	if (!v_args) {
-		pr_perror("args not found in config");
+		pr_perror("%s: args not found in config", id);
 		return EXIT_FAILURE;
 	}
 
@@ -921,12 +932,12 @@ int main(int argc, char *argv[])
 	cmd = YAJL_GET_STRING(v_arg0_value);
 	/* Don't do anything if init is actually container runtime bind mounted /dev/init */
 	if (!strcmp(cmd, "/dev/init")) {
-		pr_pdebug("Skipping as container command is /dev/init, not systemd init\n");
+		pr_pdebug("%s: Skipping as container command is /dev/init, not systemd init", id);
 		return EXIT_SUCCESS;
 	}
 	char *cmd_file_name = basename(cmd);
 	if (strcmp("init", cmd_file_name) && strcmp("systemd", cmd_file_name)) {
-		pr_pdebug("Skipping as container command is %s, not init or systemd\n", cmd);
+		pr_pdebug("%s: Skipping as container command is %s, not init or systemd", id, cmd);
 		return EXIT_SUCCESS;
 	}
 #endif
@@ -935,7 +946,7 @@ int main(int argc, char *argv[])
 	const char *root_path[] = { "root", "path", (const char *)0 };
 	yajl_val v_root = yajl_tree_get(config_node, root_path, yajl_t_string);
 	if (!v_root) {
-		pr_perror("root path not found in config.json");
+		pr_perror("%s: root path not found in config.json", id);
 		return EXIT_FAILURE;
 	}
 	char *rootfs = YAJL_GET_STRING(v_root);
@@ -944,15 +955,14 @@ int main(int argc, char *argv[])
 	if (rootfs[0] != '/') {
 		char *new_rootfs;
 
-		asprintf(&new_rootfs, "%s/%s", YAJL_GET_STRING(v_bundle_path), rootfs);
-		if (!new_rootfs) {
-			pr_perror("failed to alloc rootfs");
+		if (asprintf(&new_rootfs, "%s/%s", YAJL_GET_STRING(v_bundle_path), rootfs) < 0) {
+			pr_perror("%s: failed to alloc rootfs", id);
 			return EXIT_FAILURE;
 		}
 		rootfs = new_rootfs;
 	}
 
-	pr_pdebug("rootfs=%s", rootfs);
+	pr_pdebug("%s: rootfs=%s", id, rootfs);
 	const char **config_mounts = NULL;
 	unsigned config_mounts_len = 0;
 	unsigned array_len = 0;
@@ -960,14 +970,14 @@ int main(int argc, char *argv[])
 	const char *mount_points_path[] = {"mounts", (const char *)0 };
 	yajl_val v_mounts = yajl_tree_get(config_node, mount_points_path, yajl_t_array);
 	if (!v_mounts) {
-		pr_perror("mounts not found in config");
+		pr_perror("%s: mounts not found in config", id);
 		return EXIT_FAILURE;
 	}
 
 	config_mounts_len = YAJL_GET_ARRAY(v_mounts)->len;
 	config_mounts = malloc (sizeof(char *) * (config_mounts_len + 1));
 	if (! config_mounts) {
-		pr_perror("error malloc'ing");
+		pr_perror("%s: error malloc'ing", id);
 		return EXIT_FAILURE;
 	}
 
@@ -977,7 +987,7 @@ int main(int argc, char *argv[])
 		const char *destination_path[] = {"destination", (const char *)0 };
 		yajl_val v_destination = yajl_tree_get(v_mounts_values, destination_path, yajl_t_string);
 		if (!v_destination) {
-			pr_perror("Cannot find mount destination");
+			pr_perror("%s: Cannot find mount destination", id);
 			return EXIT_FAILURE;
 		}
 		config_mounts[i] = YAJL_GET_STRING(v_destination);
@@ -1005,7 +1015,7 @@ int main(int argc, char *argv[])
 		const char *gid_mappings[] = {"linux", "gidMappings", (const char *)0 };
 		yajl_val v_gidMappings = yajl_tree_get(config_node, gid_mappings, yajl_t_array);
 		if (!v_gidMappings) {
-			pr_pdebug("gidMappings not found in config");
+			pr_pdebug("%s: gidMappings not found in config", id);
 			gid=0;
 		}
 
@@ -1013,7 +1023,7 @@ int main(int argc, char *argv[])
 		if (gid != 0) {
 			array_len = YAJL_GET_ARRAY(v_gidMappings)->len;
 			if (array_len < 1) {
-				pr_perror("No gid for container found");
+				pr_perror("%s: No gid for container found", id);
 				return EXIT_FAILURE;
 			}
 
@@ -1029,21 +1039,21 @@ int main(int argc, char *argv[])
 			}
 		} /* End if (gid!=0) */
 
-		pr_pdebug("GID: %d", gid);
+		pr_pdebug("%s: GID: %d", id, gid);
 
 		/* Get the uid value. */
 		int uid = -1;
 		const char *uid_mappings[] = {"linux", "uidMappings", (const char *)0 };
 		yajl_val v_uidMappings = yajl_tree_get(config_node, uid_mappings, yajl_t_array);
 		if (!v_uidMappings) {
-			pr_pdebug("uidMappings not found in config");
+			pr_pdebug("%s: uidMappings not found in config", id);
 			uid = 0;
 		}
 
 		if (uid !=0) {
 			array_len = YAJL_GET_ARRAY(v_uidMappings)->len;
 			if (array_len < 1) {
-				pr_perror("No uid for container found");
+				pr_perror("%s: No uid for container found", id);
 				return EXIT_FAILURE;
 			}
 
@@ -1059,7 +1069,7 @@ int main(int argc, char *argv[])
 			}
 		} /* End if (uid !=0) */
 
-		pr_pdebug("UID: %d", uid);
+		pr_pdebug("%s: UID: %d", id, uid);
 
 		if (prestart(rootfs, id, target_pid, mount_label, config_mounts, config_mounts_len, uid, gid) != 0) {
 			return EXIT_FAILURE;
@@ -1069,14 +1079,14 @@ int main(int argc, char *argv[])
 	*/
 	} else if ((argc >= 2 && !strcmp("poststop", argv[1])) ||
 		   (argc == 1 && target_pid == 0)) {
-		if (poststop(rootfs, config_mounts, config_mounts_len) != 0) {
+		if (poststop(id, rootfs, config_mounts, config_mounts_len) != 0) {
 			return EXIT_FAILURE;
 		}
 	} else {
 		if (argc >= 2) {
-			pr_pdebug("%s ignored", argv[1]);
+			pr_pdebug("%s: %s ignored", id, argv[1]);
 		} else {
-			pr_pdebug("No args ignoring");
+			pr_pdebug("%s: No args ignoring", id);
 		}
 	}
 
