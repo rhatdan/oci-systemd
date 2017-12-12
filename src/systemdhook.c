@@ -7,6 +7,7 @@
 #include <sys/mount.h>
 #include <syslog.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/sysinfo.h>
 #include <sys/types.h>
 #include <dirent.h>
@@ -115,6 +116,21 @@ static int makefilepath(char *file, mode_t mode)
     return creat(file, mode);
 }
 
+static int remount_readonly(const char *id, const char *src, const char* dest) {
+
+	struct statfs statfs_buf;
+	if (statfs(src, &statfs_buf) < 0) {
+		pr_perror("%s: Failed to stat %s", id, src);
+		return -1;
+	}
+
+	if (mount(src, dest, "bind", MS_REMOUNT|MS_BIND|MS_RDONLY | statfs_buf.f_flags, "") == -1) {
+		pr_perror("%s: Failed to remount %s readonly", id, dest);
+		return -1;
+	}
+	return 0;
+}
+
 static int bind_mount(const char *id, const char *src, const char *dest, int readonly) {
 	if (mount(src, dest, "bind", MS_BIND, NULL) == -1) {
 		pr_perror("%s: Failed to mount %s on %s", id, src, dest);
@@ -122,8 +138,7 @@ static int bind_mount(const char *id, const char *src, const char *dest, int rea
 	}
 	//  Remount bind mount to read/only if requested by the caller
 	if (readonly) {
-		if (mount(src, dest, "bind", MS_REMOUNT|MS_BIND|MS_RDONLY, "") == -1) {
-			pr_perror("%s: Failed to remount %s readonly", id, dest);
+		if (remount_readonly(id, src, dest) < 0) {
 			return -1;
 		}
 	}
@@ -273,8 +288,7 @@ static int mount_cgroup(const char *id, const char *rootfs, const char *options,
 		pr_perror("%s: Failed to mkdir new dest: %s", id, systemd_path);
 		return -1;
 	}
-	if (mount(cgroup_path, cgroup_path, "bind", MS_REMOUNT|MS_BIND|MS_RDONLY, "") == -1) {
-		pr_perror("%s: Failed to remount %s readonly", id, cgroup_path);
+	if (remount_readonly(id, cgroup_path, cgroup_path) < 0) {
 		return -1;
 	}
 	return 0;
@@ -903,7 +917,7 @@ int main(int argc, char *argv[])
 			yajl_val v_env = YAJL_GET_ARRAY(v_envs)->values[i];
 			char *str = YAJL_GET_STRING(v_env);
 			/****
-			* If the oci-systemd-hook variable is passed with "disabled", 
+			* If the oci-systemd-hook variable is passed with "disabled",
 			* stop execution of oci-systemd-hook.
 			******/
 			if (strncmp (str, "oci-systemd-hook=", strlen ("oci-systemd-hook=")) == 0) {
