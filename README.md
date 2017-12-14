@@ -31,9 +31,12 @@ If you created a container image based on a Dockerfile like the following:
 cat Dockerfile
 FROM fedora:latest
 ENV container docker
-RUN dnf -y install httpd; dnf -y update; dnf clean all; systemctl enable httpd; systemctl disable dnf-makecache.timer dnf-makecache.service
+RUN yum -y update && yum -y install httpd && yum clean all
+RUN systemctl mask dnf-makecache.timer && systemctl enable httpd
 CMD [ "/sbin/init" ]
 ```
+
+(The `systemctl mask dnf-makecache.timer` is a workaround for a container base image bug)
 
 You should then be able to execute the following commands:
 
@@ -73,7 +76,7 @@ Prior to installing oci-systemd-hook, install the following packages on your lin
 In Fedora, you can use this command:
 
 ```
- dnf -y install \
+ yum -y install \
     autoconf \
     automake \
     gcc \
