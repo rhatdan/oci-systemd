@@ -2,37 +2,42 @@
 %global provider_tld    com
 %global project         projectatomic
 %global repo            oci-systemd-hook
-# https://github.com/projectatomic/oci-register-machine
+# https://github.com/projectatomic/oci-systemd-hook
 %global provider_prefix %{provider}.%{provider_tld}/%{project}/%{repo}
 %global import_path     %{provider_prefix}
 %global commit          de345df3c18a6abfc8d9cf3822405c0e1bbe65c9
 %global shortcommit     %(c=%{commit}; echo ${c:0:7})
 
-Name:           oci-systemd-hook
-Version:        0.1.5
+Name:           %{repo}
+Version:        0.1.15
 Release:        1.git%{shortcommit}%{?dist}
 Summary:        OCI systemd hook for docker
 Group:          Applications/Text
 License:        GPLv3+
-URL:            https://%{provider_prefix}
-Source0:        https://%{provider_prefix}/archive/%{commit}/%{repo}-%{shortcommit}.tar.gz
+URL:            https://%{import_path}
+Source0:        https://%{import_path}/archive/%{commit}/%{name}-%{shortcommit}.tar.gz
 
 BuildRequires:  autoconf
 BuildRequires:  automake
 BuildRequires:  pkgconfig(yajl)
 BuildRequires:  pkgconfig(libselinux)
 BuildRequires:  pkgconfig(mount)
-BuildRequires:  golang-github-cpuguy83-go-md2man
+BuildRequires:  pcre-devel
+BuildRequires:  go-md2man
+Obsoletes:      %{name} <= 1.10.3-46
+# golang / go-md2man not available on ppc64
+ExcludeArch:    ppc64
 
 %description
 OCI systemd hooks enable running systemd in a OCI runc/docker container.
 
 %prep
-%setup -q -n %{repo}-%{commit}
+%setup -q -n %{name}-%{commit}
 
 %build
+aclocal
 autoreconf -i
-%configure --libexecdir=/usr/libexec/oci/hooks.d/
+%configure --libexecdir=%{_libexecdir}/oci/hooks.d/
 make %{?_smp_mflags}
 
 %install
@@ -41,16 +46,20 @@ make %{?_smp_mflags}
 #define license tag if not already defined
 %{!?_licensedir:%global license %doc}
 %files
-%{_libexecdir}/oci/hooks.d/oci-systemd-hook
-%{_mandir}/man1/oci-systemd-hook.1*
 %doc README.md
 %license LICENSE
-%dir /%{_libexecdir}/oci
-%dir /%{_libexecdir}/oci/hooks.d
+%{_mandir}/man1/%{name}.1*
+%dir %{_libexecdir}/oci
+%dir %{_libexecdir}/oci/hooks.d
+%{_libexecdir}/oci/hooks.d/%{name}
 %dir %{_usr}/share/containers/oci/hooks.d
-%{_usr}/share/containers/oci/hooks.d/oci-register-machine.json
+%{_usr}/share/containers/oci/hooks.d/oci-systemd-hook.json
 
 %changelog
+* Thu Dec 21 2017 Dan Walsh <dwalsh@redhat.com> - 1:0.1.15-1.git
+- Fix issue with oci-systemd-hook running in user namespaces
+- fix json file to run container with proper stage field.
+
 * Wed Sep 13 2017 Dan Walsh <dwalsh@redhat.com> - 0.1.5-1.gitde345df
 - Add support for json configuration to identify when to use hook
 - Needed for crio package
