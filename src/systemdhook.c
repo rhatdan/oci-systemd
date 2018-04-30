@@ -433,6 +433,7 @@ static int move_mounts(const char *id,
 }
 
 static int prestart(const char *rootfs,
+		const char *container_uuid,
 		const char *id,
 		int pid,
 		const char *mount_label,
@@ -536,7 +537,7 @@ static int prestart(const char *rootfs,
 	*/
 	if (!contains_mount(id, config_mounts, config_mounts_len, "/var/log/journal")) {
 		char journal_dir[PATH_MAX];
-		snprintf(journal_dir, PATH_MAX, "/var/log/journal/%.32s", id);
+		snprintf(journal_dir, PATH_MAX, "/var/log/journal/%.32s", container_uuid);
 		char cont_journal_dir[PATH_MAX];
 		snprintf(cont_journal_dir, PATH_MAX, "%s/var/log/journal", rootfs);
 		if (makepath(journal_dir, 0755) == -1) {
@@ -572,7 +573,7 @@ static int prestart(const char *rootfs,
 			   create /run/journal instead, systemd should write here
 			   if it is not allowed to write to /var/log/journal
 			*/
-			snprintf(cont_journal_dir, PATH_MAX, "%s/run/journal/%.32s", rootfs, id);
+			snprintf(cont_journal_dir, PATH_MAX, "%s/run/journal/%.32s", rootfs, container_uuid);
 		}
 
 		if ((makepath(cont_journal_dir, 0755) == -1) &&
@@ -691,7 +692,7 @@ static int prestart(const char *rootfs,
 			return -1;
 		}
 
-		rc = dprintf(fd, "%.32s\n", id);
+		rc = dprintf(fd, "%.32s\n", container_uuid);
 		if (rc < 0) {
 			pr_perror("%s: Failed to write id to %s", id, mid_path);
 			return -1;
@@ -846,11 +847,11 @@ int main(int argc, char *argv[])
 		pr_perror("id not found in state");
 		return EXIT_FAILURE;
 	}
-	char *container_id = YAJL_GET_STRING(v_id);
+	char *container_uuid = YAJL_GET_STRING(v_id);
 	_cleanup_free_ char *id = NULL;
-	id = shortid(container_id);
+	id = shortid(container_uuid);
 	if (!id) {
-		pr_perror("%s: failed to create shortid", container_id);
+		pr_perror("%s: failed to create shortid", container_uuid);
 		return EXIT_FAILURE;
 	}
 
@@ -927,10 +928,10 @@ int main(int argc, char *argv[])
 				}
 			}
 			if (strncmp (str, "container_uuid=", strlen ("container_uuid=")) == 0) {
-				id = strdup (str + strlen ("container_uuid="));
+				container_uuid = strdup (str + strlen ("container_uuid="));
 				/* systemd expects $container_uuid= to be an UUID but then treat it as
 					not containing any '-'.  Do the same here.  */
-				char *to = id;
+				char *to = container_uuid;
 				for (char *from = to; *from; from++) {
 					if (*from != '-')
 						*to++ = *from;
@@ -1089,7 +1090,7 @@ int main(int argc, char *argv[])
 
 		pr_pdebug("%s: UID: %d", id, uid);
 
-		if (prestart(rootfs, id, target_pid, mount_label, config_mounts, config_mounts_len, uid, gid) != 0) {
+		if (prestart(rootfs, container_uuid, id, target_pid, mount_label, config_mounts, config_mounts_len, uid, gid) != 0) {
 			return EXIT_FAILURE;
 		}
 	/* If caller did not specify argv[1], and target_pid == 0, we default
