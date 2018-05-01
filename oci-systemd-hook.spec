@@ -5,11 +5,11 @@
 # https://github.com/projectatomic/oci-systemd-hook
 %global provider_prefix %{provider}.%{provider_tld}/%{project}/%{repo}
 %global import_path     %{provider_prefix}
-%global commit          de345df3c18a6abfc8d9cf3822405c0e1bbe65c9
+%global commit          2d0b8a328d2e0b22d00a47911a0e6ee16e0ea072
 %global shortcommit     %(c=%{commit}; echo ${c:0:7})
 
 Name:           %{repo}
-Version:        0.1.15
+Version:        0.1.16
 Release:        1.git%{shortcommit}%{?dist}
 Summary:        OCI systemd hook for docker
 Group:          Applications/Text
@@ -56,6 +56,10 @@ make %{?_smp_mflags}
 %{_usr}/share/containers/oci/hooks.d/oci-systemd-hook.json
 
 %changelog
+* Tue May 1 2018 Dan Walsh <dwalsh@redhat.name> - 1:0.1.16-1.gitde345df
+- Merge pull request #90 from brahim-raddahi/master
+- fix invalid /etc/machine-id
+
 * Thu Dec 21 2017 Dan Walsh <dwalsh@redhat.com> - 1:0.1.15-1.git
 - Fix issue with oci-systemd-hook running in user namespaces
 - fix json file to run container with proper stage field.
