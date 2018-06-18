@@ -5,7 +5,7 @@
 # https://github.com/projectatomic/oci-systemd-hook
 %global provider_prefix %{provider}.%{provider_tld}/%{project}/%{repo}
 %global import_path     %{provider_prefix}
-%global commit          2d0b8a328d2e0b22d00a47911a0e6ee16e0ea072
+%global commit          05bd9a0cceb8ad88a2815f25911f519162181def
 %global shortcommit     %(c=%{commit}; echo ${c:0:7})
 
 Name:           %{repo}
@@ -56,7 +56,7 @@ make %{?_smp_mflags}
 %{_usr}/share/containers/oci/hooks.d/oci-systemd-hook.json
 
 %changelog
-* Tue May 1 2018 Dan Walsh <dwalsh@redhat.name> - 1:0.1.16-1.gitde345df
+* Tue May 1 2018 Dan Walsh <dwalsh@redhat.name> - 1:0.1.16-1.git05bd9a0
 - Merge pull request #90 from brahim-raddahi/master
 - fix invalid /etc/machine-id
 

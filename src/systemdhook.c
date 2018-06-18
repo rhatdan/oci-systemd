@@ -157,8 +157,10 @@ static int chperm(const char *id, const char *path, const char *label, int uid, 
 				closedir(dir);
 				return -1;
 			}
-			if (setfilecon (full_path, label) < 0) {
-				pr_perror("%s: Failed to set context %s on %s", id, label, full_path);
+			if (label != NULL && (strcmp("", label))) {
+				if (setfilecon (full_path, label) < 0) {
+					pr_perror("%s: Failed to set context %s on %s", id, label, full_path);
+				}
 			}
 
 			if (doChown) {
@@ -817,20 +819,19 @@ int main(int argc, char *argv[])
 {
 	_cleanup_(yajl_tree_freep) yajl_val node = NULL;
 	_cleanup_(yajl_tree_freep) yajl_val config_node = NULL;
-	char errbuf[BUFLEN];
+	char errbuf[PATH_MAX+100];
 	char *stateData;
 	char *configData;
 	char config_file_name[PATH_MAX];
 	_cleanup_fclose_ FILE *fp = NULL;
 
 	/* Read the entire state from stdin */
-	snprintf(errbuf, BUFLEN, "failed to read state data from standard input");
-	stateData = getJSONstring(stdin, (size_t)CHUNKSIZE, errbuf);
+	stateData = getJSONstring(stdin, (size_t)CHUNKSIZE, "failed to read state data from standard input");
 	if (stateData == NULL)
 		return EXIT_FAILURE;
 
 	/* Parse the state */
-	memset(errbuf, 0, BUFLEN);
+	memset(errbuf, 0, sizeof(errbuf));
 	node = yajl_tree_parse((const char *)stateData, errbuf, sizeof(errbuf));
 	if (node == NULL) {
 		if (strlen(errbuf)) {
@@ -878,7 +879,7 @@ int main(int argc, char *argv[])
 		pr_pinfo("%s: Failed reading state data: bundlePath not found.  Generally this indicates Docker versions prior to 1.12 are installed.", id);
 		return EXIT_SUCCESS;
 	}
-	snprintf(config_file_name, PATH_MAX, "%s/config.json", YAJL_GET_STRING(v_bundle_path));
+	snprintf(config_file_name, sizeof(config_file_name), "%s/config.json", YAJL_GET_STRING(v_bundle_path));
 	fp = fopen(config_file_name, "r");
 
 	if (fp == NULL) {
@@ -887,13 +888,13 @@ int main(int argc, char *argv[])
 	}
 
 	/* Read the entire config file */
-	snprintf(errbuf, BUFLEN, "failed to read config data from %s", config_file_name);
+	snprintf(errbuf, sizeof(errbuf), "failed to read config data from %s", config_file_name);
 	configData = getJSONstring(fp, (size_t)CHUNKSIZE, errbuf);
 	if (configData == NULL)
 		return EXIT_FAILURE;
 
 	/* Parse the config file */
-	memset(errbuf, 0, BUFLEN);
+	memset(errbuf, 0, sizeof(errbuf));
 	config_node = yajl_tree_parse((const char *)configData, errbuf, sizeof(errbuf));
 	if (config_node == NULL) {
 		if (strlen(errbuf)) {
