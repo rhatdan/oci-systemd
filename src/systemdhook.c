@@ -378,59 +378,60 @@ static int move_mounts(const char *id,
 		       char *options
 	) {
 
+	/* Create the PATH directory */
+	if (contains_mount(id, config_mounts, config_mounts_len, path))
+		return 0;
+
 	char mount_dir[PATH_MAX];
 	snprintf(mount_dir, PATH_MAX, "%s%s", rootfs, path);
+	if (mkdir(mount_dir, 0755) == -1) {
+		if (errno != EEXIST) {
+			pr_perror("%s: Failed to mkdir: %s", id, mount_dir);
+			return -1;
+		}
+	}
 
 	/* Create a temporary directory to move the PATH mounts to */
-	char temp_template[] = "/tmp/ocitmp.XXXXXX";
-
+	char temp_template[] = "/tmp/oci-systemd-hook.XXXXXX";
 	char *tmp_dir = mkdtemp(temp_template);
 	if (tmp_dir == NULL) {
 		pr_perror("%s: Failed to create temporary directory for mounts", id);
 		return -1;
 	}
 
-	/* Create the PATH directory */
-	if (!contains_mount(id, config_mounts, config_mounts_len, path)) {
-		if (mkdir(mount_dir, 0755) == -1) {
-			if (errno != EEXIST) {
-				pr_perror("%s: Failed to mkdir: %s", id, mount_dir);
+	/* Mount tmpfs at new temp directory */
+	if (mount("tmpfs", tmp_dir, "tmpfs", MS_NODEV|MS_NOSUID, options) == -1) {
+		pr_perror("%s: Failed to mount tmpfs at %s", id, tmp_dir);
+		return -1;
+	}
+
+	/* Move other user specified mounts under PATH to temporary directory */
+	for (unsigned i = 0; i < config_mounts_len; i++) {
+		/* Match destinations that begin with PATH */
+		if (!strncmp(path, config_mounts[i], strlen(path))) {
+			if (move_mount_to_tmp(id, rootfs, tmp_dir, config_mounts[i], strlen(path)) < 0) {
+				pr_perror("%s: Failed to move %s to %s", id, config_mounts[i], tmp_dir);
 				return -1;
 			}
 		}
-
-		/* Mount tmpfs at new temp directory */
-		if (mount("tmpfs", tmp_dir, "tmpfs", MS_NODEV|MS_NOSUID, options) == -1) {
-			pr_perror("%s: Failed to mount tmpfs at %s", id, tmp_dir);
-			return -1;
-		}
-
-		/* Move other user specified mounts under PATH to temporary directory */
-		for (unsigned i = 0; i < config_mounts_len; i++) {
-			/* Match destinations that begin with PATH */
-			if (!strncmp(path, config_mounts[i], strlen(path))) {
-				if (move_mount_to_tmp(id, rootfs, tmp_dir, config_mounts[i], strlen(path)) < 0) {
-					pr_perror("%s: Failed to move %s to %s", id, config_mounts[i], tmp_dir);
-					return -1;
-				}
-			}
-		}
-
-		/* Move temporary directory to PATH */
-		if ((mount(tmp_dir, mount_dir, "", MS_MOVE, "") == -1)) {
-			pr_perror("%s: Failed to move mount %s to %s", id, tmp_dir, mount_dir);
-			return -1;
-		}
-		if (chown(mount_dir, uid, gid) < 0 ) {
-			pr_perror("%s: Failed to chown %d:%d to mount_dir owner: %s", id, uid, gid, mount_dir);
-		}
 	}
 
+	/* Move temporary directory to PATH */
+	if ((mount(tmp_dir, mount_dir, "", MS_MOVE, "") == -1)) {
+		pr_perror("%s: Failed to move mount %s to %s", id, tmp_dir, mount_dir);
+		return -1;
+	}
 	/* Remove the temp directory for PATH */
-	if (rmdir(tmp_dir) < 0) {
+	int rc = rmdir(tmp_dir);
+	tmp_dir=NULL;
+	if (rc < 0) {
 		pr_perror("%s: Failed to remove %s", id, tmp_dir);
 		return -1;
 	}
+	if (chown(mount_dir, uid, gid) < 0 ) {
+		pr_perror("%s: Failed to chown %d:%d to mount_dir owner: %s", id, uid, gid, mount_dir);
+	}
+
 	return 0;
 }
 
@@ -478,6 +479,11 @@ static int prestart(const char *rootfs,
 	}
 	if (rc < 0) {
 		pr_perror("%s: Failed to allocate memory for context", id);
+		return -1;
+	}
+
+	if (mount("", "/run", "", MS_SLAVE|MS_REC, "") == -1) {
+		pr_perror("%s: Failed to make /run MS_PRIVATE", id);
 		return -1;
 	}
 
@@ -532,6 +538,11 @@ static int prestart(const char *rootfs,
 
 	char tmp_dir[PATH_MAX];
 	snprintf(tmp_dir, PATH_MAX, "%s/tmp", rootfs);
+
+	if (mount("", rootfs, "", MS_SLAVE|MS_REC, "") == -1) {
+		pr_perror("%s: Failed to make %s MS_SLAVE", id, rootfs);
+		return -1;
+	}
 
 	/*
 	   Create a /var/log/journal directory on the host and mount it into
