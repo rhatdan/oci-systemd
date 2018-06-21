@@ -13,7 +13,7 @@ When oci-systemd-hook detects systemd inside of the container it does the follow
 
 * Mounts a tmpfs on /run and /tmp
 -  If there is content in the container image's /run and /tmp that content will be copied onto the tmpfs.
-* Creates a /etc/machine-id based on the the containers UUID
+* Creates a /etc/machine-id based on the the container's UUID
 * Mounts the hosts /sys/fs/cgroups file systemd read-only into the container
 - /sys/fs/cgroup/systemd will be mounted read/write into the container.
 
@@ -46,7 +46,7 @@ docker run -ti --stop-signal=RTMIN+3 httpd
 ```
 
 If you run this hook along with oci-register-machine oci hook, you will be able
-to show the containers journal information on the host, using journalctl.
+to show the container's journal information on the host, using journalctl.
 
 ```
 journalctl -M CONTAINER_UUID
