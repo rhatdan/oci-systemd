@@ -1,6 +1,6 @@
 # OCI systemd hooks
 
-OCI systemd hook enables users to run systemd in docker and [OCI](https://github.com/opencontainers/specs) compatible runtimes such as runc without requiring `--privileged` flag.
+OCI systemd hook enables users to run systemd in docker and [OCI][] compatible runtimes such as runc without requiring `--privileged` flag.
 
 This project produces a C binary that can be used with runc and Docker (with minor code changes).
 If you clone this branch and build/install `oci-systemd-hook`, a binary should be placed in
@@ -96,3 +96,5 @@ autoreconf -i
 make
 make install
 ```
+
+[OCI]: https://github.com/opencontainers/runtime-spec
