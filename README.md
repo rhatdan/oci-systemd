@@ -1,5 +1,4 @@
 # OCI systemd hooks
-==============
 
 OCI systemd hook enables users to run systemd in docker and [OCI](https://github.com/opencontainers/specs) compatible runtimes such as runc without requiring `--privileged` flag.
 
