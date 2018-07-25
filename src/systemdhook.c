@@ -158,7 +158,7 @@ static int chperm(const char *id, const char *path, const char *label, int uid, 
 				return -1;
 			}
 			if (label != NULL && (strcmp("", label))) {
-				if (setfilecon (full_path, label) < 0) {
+				if ((is_selinux_enabled() > 0) && (setfilecon (full_path, label) < 0)) {
 					pr_perror("%s: Failed to set context %s on %s", id, label, full_path);
 				}
 			}
@@ -550,8 +550,8 @@ static int prestart(const char *rootfs,
 		}
 
 		if (strcmp("", mount_label)) {
-			rc = setfilecon(journal_dir, (security_context_t)mount_label);
-			if (rc < 0) {
+			if ((is_selinux_enabled() > 0) &&
+			    (setfilecon(journal_dir, (security_context_t)mount_label) < 0)) {
 				pr_perror("%s: Failed to set journal dir selinux context", id);
 				return -1;
 			}
