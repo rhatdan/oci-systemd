@@ -572,10 +572,10 @@ static int prestart(const char *rootfs,
 			}
 		} else {
 			/* If you can't create /var/log/journal inside of rootfs,
-			   create /run/journal instead, systemd should write here
+			   create /run/log/journal instead, systemd should write here
 			   if it is not allowed to write to /var/log/journal
 			*/
-			snprintf(cont_journal_dir, PATH_MAX, "%s/run/journal/%.32s", rootfs, container_uuid);
+			snprintf(cont_journal_dir, PATH_MAX, "%s/run/log/journal/%.32s", rootfs, container_uuid);
 		}
 
 		if ((makepath(cont_journal_dir, 0755) == -1) &&
