@@ -51,6 +51,39 @@ to show the container's journal information on the host, using journalctl.
 journalctl -M CONTAINER_UUID
 ```
 
+To use this directly with runc, modify or add the following to config.json.
+
+```
+    "hooks": {
+        "prestart": [
+            {
+                "path": "/usr/libexec/oci/hooks.d/oci-systemd-hook"
+            }
+        ]
+    },
+...
+    "process": {
+        "capabilities": {
+...
+                "CAP_AUDIT_WRITE",
+                "CAP_KILL",
+                "CAP_NET_BIND_SERVICE",
+                "CAP_MKNOD",
+                "CAP_CHOWN",
+                "CAP_DAC_OVERRIDE",
+                "CAP_FSETID",
+                "CAP_FOWNER",
+                "CAP_NET_RAW",
+                "CAP_SETGID",
+                "CAP_SETUID",
+                "CAP_SETFCAP",
+                "CAP_SETPCAP",
+                "CAP_SYS_CHROOT"
+...
+        "env": [
+            "container=oci",
+```
+
 **Disabling oci-systemd-hook**
 
 To disable oci-systemd-hook for a particular run, which is primarily useful in an Atomic Host environment, the environment variable 'oci-systemd-hook' can be set to 'disabled'.  This prevents oci-systemd-hook from being run for that invocation.  A sample usage is:
